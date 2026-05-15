@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import '../../features/admin/admin_screen.dart';
 import '../../features/auth/invite_redirect_screen.dart';
 import '../../features/chat/chat_screen.dart';
+import '../../features/debug/theme_preview_screen.dart';
 import '../../features/onboarding/workspace_join_screen.dart';
 import '../../features/profile/profile_screen.dart';
 import '../../features/projects/projects_screen.dart';
@@ -43,6 +44,10 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/admin',
       builder: (context, state) => const AdminScreen(),
+    ),
+    GoRoute(
+      path: '/debug/theme',
+      builder: (context, state) => const ThemePreviewScreen(),
     ),
     GoRoute(
       path: '/project/:projectId',
