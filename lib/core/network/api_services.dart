@@ -1,21 +1,66 @@
 import 'api_client.dart';
+import '../../models/models.dart';
 
 class AuthService {
   const AuthService(this.client);
 
   final ApiClient client;
+
+  Future<User?> getMe() {
+    return client.get('/auth/me', parse: User.fromJson);
+  }
+
+  Future<User?> updateTimezone(String timezone) {
+    return client.patch(
+      '/auth/me/timezone',
+      body: {'timezone': timezone},
+      parse: User.fromJson,
+    );
+  }
+
+  Future<User?> updateTitle(String title) {
+    return client.patch(
+      '/auth/me/title',
+      body: {'title': title},
+      parse: User.fromJson,
+    );
+  }
+
+  Future<String> getLoginUrl() async {
+    final response = await client.get<Map<String, dynamic>>('/auth/login');
+    return response?['url']?.toString() ?? '';
+  }
+
+  Future<List<Map<String, dynamic>>> devLogin() async {
+    final response = await client.get<List<dynamic>>('/auth/dev-login');
+    return response
+            ?.whereType<Map>()
+            .map((item) => item.map((key, value) => MapEntry('$key', value)))
+            .toList(growable: false) ??
+        <Map<String, dynamic>>[];
+  }
 }
 
 class TenantService {
   const TenantService(this.client);
 
   final ApiClient client;
+
+  Future<List<Tenant>> list() async {
+    final response = await client.get<List<dynamic>>('/tenants/');
+    return response?.map(Tenant.fromJson).toList(growable: false) ??
+        <Tenant>[];
+  }
 }
 
 class ProjectService {
   const ProjectService(this.client);
 
   final ApiClient client;
+
+  static String normalizeInviteCode(String inviteCode) {
+    return inviteCode.trim().toUpperCase();
+  }
 }
 
 class ThreadService {

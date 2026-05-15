@@ -15,7 +15,8 @@ class MaiaApp extends ConsumerWidget {
     final themeSelection = ref.watch(themeControllerProvider).maybeWhen(
           data: (selection) => selection,
           orElse: () => const MaiaThemeSelection(),
-        );
+    );
+    final router = ref.watch(appRouterProvider);
 
     return MaterialApp.router(
       title: AppConstants.appName,
@@ -26,7 +27,7 @@ class MaiaApp extends ConsumerWidget {
         mode: MaiaThemeMode.dark,
       ),
       themeMode: themeSelection.mode.materialThemeMode,
-      routerConfig: appRouter,
+      routerConfig: router,
     );
   }
 }
