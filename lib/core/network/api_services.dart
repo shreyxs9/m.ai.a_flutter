@@ -51,6 +51,21 @@ class TenantService {
     return response?.map(Tenant.fromJson).toList(growable: false) ??
         <Tenant>[];
   }
+
+  Future<TenantPreview?> previewByInvite(String code) {
+    return client.get(
+      '/tenants/by-invite/${Uri.encodeComponent(code)}',
+      parse: TenantPreview.fromJson,
+    );
+  }
+
+  Future<TenantJoinResult?> joinByInvite(String code) {
+    return client.post(
+      '/tenants/join-by-invite',
+      body: {'invite_code': code},
+      parse: TenantJoinResult.fromJson,
+    );
+  }
 }
 
 class ProjectService {
@@ -60,6 +75,14 @@ class ProjectService {
 
   static String normalizeInviteCode(String inviteCode) {
     return inviteCode.trim().toUpperCase();
+  }
+
+  Future<JoinByInviteResult?> joinByInvite(String inviteCode) {
+    return client.post(
+      '/projects/join-by-invite',
+      body: {'invite_code': normalizeInviteCode(inviteCode)},
+      parse: JoinByInviteResult.fromJson,
+    );
   }
 }
 

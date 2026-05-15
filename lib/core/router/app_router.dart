@@ -25,8 +25,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
 
       final authenticated = auth?.isAuthenticated ?? false;
       final onLogin = state.matchedLocation == '/login';
+      final onInvite = state.matchedLocation.startsWith('/join/');
+      final onWorkspaceInvite =
+          state.matchedLocation.startsWith('/join-workspace/');
 
-      if (!authenticated && !onLogin) {
+      if (!authenticated && !onLogin && !onInvite && !onWorkspaceInvite) {
         return '/login';
       }
       if (authenticated && onLogin) {

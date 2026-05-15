@@ -62,6 +62,10 @@ final tenantServiceProvider = Provider<TenantService>((ref) {
   return TenantService(ref.watch(apiClientProvider));
 });
 
+final projectServiceProvider = Provider<ProjectService>((ref) {
+  return ProjectService(ref.watch(apiClientProvider));
+});
+
 final authControllerProvider =
     AsyncNotifierProvider<AuthController, AuthState>(AuthController.new);
 
@@ -162,6 +166,27 @@ class AuthController extends AsyncNotifier<AuthState> {
     }
   }
 
+  Future<void> selectTenantId(String tenantId) async {
+    await _sessionStore.setTenantId(tenantId);
+    final current = state.asData?.value;
+    Tenant? activeTenant;
+    for (final tenant in current?.tenants ?? const <Tenant>[]) {
+      if (tenant.id == tenantId) {
+        activeTenant = tenant;
+        break;
+      }
+    }
+    if (current != null) {
+      state = AsyncData(
+        current.copyWith(
+          activeTenant: activeTenant,
+          clearActiveTenant: activeTenant == null,
+          clearError: true,
+        ),
+      );
+    }
+  }
+
   Future<void> _captureTokenFromUrl() async {
     final uri = currentBrowserUri();
     final token = uri.queryParameters['token'];
@@ -171,13 +196,31 @@ class AuthController extends AsyncNotifier<AuthState> {
 
     await _sessionStore.setToken(token);
 
-    final cleanUri = uri.replace(queryParameters: <String, String>{});
-    final cleanPath = cleanUri.hasFragment && cleanUri.fragment.isNotEmpty
-        ? '${cleanUri.path}#${cleanUri.fragment}'
-        : cleanUri.path.isEmpty
-            ? '/'
-            : cleanUri.path;
-    replaceBrowserUrl(cleanPath);
+    final replayed = await _replayPendingInvite();
+    if (!replayed) {
+      final cleanUri = uri.replace(queryParameters: <String, String>{});
+      final cleanPath = cleanUri.hasFragment && cleanUri.fragment.isNotEmpty
+          ? '${cleanUri.path}#${cleanUri.fragment}'
+          : cleanUri.path.isEmpty
+              ? '/'
+              : cleanUri.path;
+      replaceBrowserUrl(cleanPath);
+    }
+  }
+
+  Future<bool> _replayPendingInvite() async {
+    final pendingWorkspace = await _sessionStore.getPendingWorkspaceInvite();
+    final pendingProject = await _sessionStore.getPendingInvite();
+    if (pendingWorkspace == null && pendingProject == null) {
+      return false;
+    }
+
+    await _sessionStore.clearPendingInvites();
+    final path = pendingWorkspace != null
+        ? '/join-workspace/$pendingWorkspace'
+        : '/join/$pendingProject';
+    replaceBrowserUrl(path);
+    return true;
   }
 
   Future<void> _syncTimezone() async {

@@ -12,7 +12,7 @@ void main() {
     await tester.pumpWidget(const ProviderScope(child: MaiaApp()));
     await tester.pumpAndSettle();
 
-    expect(find.text('Sign in to M.AI.A'), findsOneWidget);
-    expect(find.text('Continue'), findsOneWidget);
+    expect(find.text('M.AI.A'), findsOneWidget);
+    expect(find.text('Continue with Google'), findsOneWidget);
   });
 }

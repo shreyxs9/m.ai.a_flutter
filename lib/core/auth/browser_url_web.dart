@@ -8,3 +8,7 @@ Uri currentBrowserUri() => Uri.parse(html.window.location.href);
 void replaceBrowserUrl(String path) {
   html.window.history.replaceState(null, '', path);
 }
+
+void navigateBrowserTo(String url) {
+  html.window.location.href = url;
+}
