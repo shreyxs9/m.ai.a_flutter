@@ -19,7 +19,6 @@ class ApiClient {
     this.dio.options = BaseOptions(
       baseUrl: config.normalizedBaseUrl,
       connectTimeout: config.timeout,
-      sendTimeout: config.timeout,
       receiveTimeout: config.timeout,
       contentType: Headers.jsonContentType,
       responseType: ResponseType.json,

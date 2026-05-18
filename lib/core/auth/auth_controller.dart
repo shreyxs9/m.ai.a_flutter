@@ -38,8 +38,9 @@ class AuthState {
     return AuthState(
       user: clearUser ? null : user ?? this.user,
       tenants: tenants ?? this.tenants,
-      activeTenant:
-          clearActiveTenant ? null : activeTenant ?? this.activeTenant,
+      activeTenant: clearActiveTenant
+          ? null
+          : activeTenant ?? this.activeTenant,
       loading: loading ?? this.loading,
       error: clearError ? null : error ?? this.error,
     );
@@ -66,8 +67,17 @@ final projectServiceProvider = Provider<ProjectService>((ref) {
   return ProjectService(ref.watch(apiClientProvider));
 });
 
-final authControllerProvider =
-    AsyncNotifierProvider<AuthController, AuthState>(AuthController.new);
+final userServiceProvider = Provider<UserService>((ref) {
+  return UserService(ref.watch(apiClientProvider));
+});
+
+final adminServiceProvider = Provider<AdminService>((ref) {
+  return AdminService(ref.watch(apiClientProvider));
+});
+
+final authControllerProvider = AsyncNotifierProvider<AuthController, AuthState>(
+  AuthController.new,
+);
 
 class AuthController extends AsyncNotifier<AuthState> {
   late final ApiSessionStore _sessionStore;
@@ -111,10 +121,7 @@ class AuthController extends AsyncNotifier<AuthState> {
       );
     } catch (error) {
       await _sessionStore.clear();
-      return AuthState(
-        loading: false,
-        error: _messageFor(error),
-      );
+      return AuthState(loading: false, error: _messageFor(error));
     }
   }
 
@@ -160,10 +167,26 @@ class AuthController extends AsyncNotifier<AuthState> {
         await _sessionStore.clear();
         state = AsyncData(AuthState(loading: false, error: _messageFor(error)));
       } else {
-        state = state.whenData((auth) => auth.copyWith(error: _messageFor(error)));
+        state = state.whenData(
+          (auth) => auth.copyWith(error: _messageFor(error)),
+        );
       }
       rethrow;
     }
+  }
+
+  Future<void> updateUser(User user) async {
+    state = state.whenData(
+      (auth) => auth.copyWith(user: user, clearError: true),
+    );
+  }
+
+  Future<User?> updateTitle(String title) async {
+    final user = await ref.read(authServiceProvider).updateTitle(title);
+    if (user != null) {
+      await updateUser(user);
+    }
+    return user;
   }
 
   Future<void> selectTenantId(String tenantId) async {
@@ -202,8 +225,8 @@ class AuthController extends AsyncNotifier<AuthState> {
       final cleanPath = cleanUri.hasFragment && cleanUri.fragment.isNotEmpty
           ? '${cleanUri.path}#${cleanUri.fragment}'
           : cleanUri.path.isEmpty
-              ? '/'
-              : cleanUri.path;
+          ? '/'
+          : cleanUri.path;
       replaceBrowserUrl(cleanPath);
     }
   }

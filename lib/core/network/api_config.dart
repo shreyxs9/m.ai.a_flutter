@@ -9,7 +9,7 @@ class ApiConfig {
   static const defaultConfig = ApiConfig(
     baseUrl: String.fromEnvironment(
       'MAIA_API_BASE_URL',
-      defaultValue: 'https://maia-backend-7vtst4xamq-el.a.run.app',
+      defaultValue: 'http://localhost:8000',
     ),
     basePath: String.fromEnvironment(
       'MAIA_API_BASE_PATH',
@@ -20,7 +20,7 @@ class ApiConfig {
       'API_ORIGIN',
       defaultValue: String.fromEnvironment(
         'MAIA_API_BASE_URL',
-        defaultValue: 'https://maia-backend-7vtst4xamq-el.a.run.app',
+        defaultValue: 'http://localhost:8000',
       ),
     ),
   );
