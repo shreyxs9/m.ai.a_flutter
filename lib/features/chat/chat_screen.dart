@@ -39,13 +39,24 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   ProjectWithMembers? _project;
   Thread? _thread;
   List<Message> _messages = const <Message>[];
+  List<MemberStatus> _teamStatus = const <MemberStatus>[];
+  List<Message> _memberTimeline = const <Message>[];
+  String? _activeMemberId;
+  MemberStatus? _relayTarget;
   String? _error;
   bool _loading = true;
   bool _sending = false;
+  bool _timelineLoading = false;
   bool _loadingOlder = false;
   bool _hasMoreOlder = false;
   bool _rightPanelOpen = true;
   bool _didInitialScroll = false;
+  bool _broadcastMode = false;
+  bool _mentionOpen = false;
+  String _mentionQuery = '';
+  int _mentionStart = -1;
+  int _mentionIndex = 0;
+  final Set<String> _mentionedUserIds = <String>{};
 
   @override
   void initState() {
@@ -62,12 +73,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         _project = null;
         _thread = null;
         _messages = const <Message>[];
+        _teamStatus = const <MemberStatus>[];
+        _memberTimeline = const <Message>[];
+        _activeMemberId = null;
+        _relayTarget = null;
         _error = null;
         _loading = true;
         _sending = false;
+        _timelineLoading = false;
         _loadingOlder = false;
         _hasMoreOlder = false;
         _didInitialScroll = false;
+        _broadcastMode = false;
+        _mentionOpen = false;
+        _mentionQuery = '';
+        _mentionStart = -1;
+        _mentionIndex = 0;
+        _mentionedUserIds.clear();
       });
       unawaited(_load());
     }
@@ -97,6 +119,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       final results = await Future.wait<Object?>([
         ref.read(projectServiceProvider).get(projectId),
         ref.read(threadServiceProvider).getOrCreateForProject(projectId),
+        ref.read(projectServiceProvider).teamStatus(projectId),
       ]);
       if (!mounted || projectId != widget.projectId) {
         return;
@@ -104,6 +127,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
       final project = results[0] as ProjectWithMembers?;
       final thread = results[1] as Thread?;
+      final teamStatus = results[2] as List<MemberStatus>;
       if (project == null || thread == null) {
         throw const ApiException(null, 'Project chat could not be loaded.');
       }
@@ -118,6 +142,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       setState(() {
         _project = project;
         _thread = thread;
+        _teamStatus = teamStatus;
         _messages = _ordered(_merge(const <Message>[], messages));
         _hasMoreOlder = messages.length >= _pageSize;
         _loading = false;
@@ -197,14 +222,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       return;
     }
 
+    if (_broadcastMode) {
+      await _confirmBroadcast(body);
+      return;
+    }
+
     final optimistic = _optimisticMessage(
       threadId: thread.id,
       body: body,
       userId: userId,
     );
+    final mentionUserIds = _canonicalMentionUserIds(body);
     _composerController.clear();
     setState(() {
       _sending = true;
+      _mentionOpen = false;
+      _mentionedUserIds.clear();
       _messages = _ordered(_merge(_messages, [optimistic]));
     });
     _scrollToBottomSoon();
@@ -212,7 +245,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     try {
       final created = await ref
           .read(messageServiceProvider)
-          .sendToThread(thread.id, body);
+          .sendToThread(thread.id, body, mentionUserIds: mentionUserIds);
       if (!mounted || thread.id != _thread?.id) {
         return;
       }
@@ -242,6 +275,250 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         _composerFocus.requestFocus();
       }
     }
+  }
+
+  Future<void> _confirmBroadcast(String body) async {
+    final project = _project;
+    if (project == null) {
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: !_sending,
+      builder: (context) =>
+          _BroadcastConfirmDialog(project: project, preview: body),
+    );
+    if (confirmed != true || !mounted) {
+      _composerFocus.requestFocus();
+      return;
+    }
+
+    setState(() => _sending = true);
+    try {
+      final created = await ref
+          .read(messageServiceProvider)
+          .broadcast(projectId: project.id, body: body);
+      if (!mounted || project.id != widget.projectId) {
+        return;
+      }
+      _composerController.clear();
+      setState(() {
+        _broadcastMode = false;
+        _mentionOpen = false;
+        _mentionedUserIds.clear();
+        _messages = _ordered(_merge(_messages, created));
+      });
+      _scrollToBottomSoon();
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_messageFor(error))));
+    } finally {
+      if (mounted) {
+        setState(() => _sending = false);
+        _composerFocus.requestFocus();
+      }
+    }
+  }
+
+  Future<void> _sendRelay({
+    required String? targetUserId,
+    required String body,
+    String? repliesToMessageId,
+  }) async {
+    final project = _project;
+    if (project == null || body.trim().isEmpty || _sending) {
+      return;
+    }
+    setState(() => _sending = true);
+    try {
+      final created = await ref
+          .read(messageServiceProvider)
+          .relay(
+            projectId: project.id,
+            targetUserId: targetUserId,
+            body: body.trim(),
+            repliesToMessageId: repliesToMessageId,
+          );
+      if (!mounted || project.id != widget.projectId) {
+        return;
+      }
+      setState(() {
+        _messages = _ordered(_merge(_messages, created));
+      });
+      await _refreshTeamStatus();
+      if (targetUserId != null && _activeMemberId == targetUserId) {
+        await _loadMemberTimeline(targetUserId);
+      }
+      _scrollToBottomSoon();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_messageFor(error))));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _sending = false);
+      }
+    }
+  }
+
+  Future<void> _refreshTeamStatus() async {
+    final projectId = widget.projectId;
+    if (projectId.isEmpty) {
+      return;
+    }
+    try {
+      final status = await ref
+          .read(projectServiceProvider)
+          .teamStatus(projectId);
+      if (mounted && projectId == widget.projectId) {
+        setState(() => _teamStatus = status);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _loadMemberTimeline(String userId) async {
+    final project = _project;
+    if (project == null) {
+      return;
+    }
+    setState(() {
+      _timelineLoading = true;
+      _activeMemberId = userId;
+    });
+    try {
+      final timeline = await ref
+          .read(projectServiceProvider)
+          .memberTimeline(project.id, userId);
+      if (mounted &&
+          project.id == widget.projectId &&
+          _activeMemberId == userId) {
+        setState(() => _memberTimeline = _ordered(timeline));
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_messageFor(error))));
+      }
+    } finally {
+      if (mounted && _activeMemberId == userId) {
+        setState(() => _timelineLoading = false);
+      }
+    }
+  }
+
+  Future<void> _toggleResolved(String messageId, bool nextResolved) async {
+    final previous = _messages;
+    final now = DateTime.now().toUtc();
+    setState(() {
+      _messages = _messages
+          .map(
+            (message) => message.id == messageId
+                ? message.copyWith(resolvedAt: nextResolved ? now : null)
+                : message,
+          )
+          .toList(growable: false);
+      _memberTimeline = _memberTimeline
+          .map(
+            (message) => message.id == messageId
+                ? message.copyWith(resolvedAt: nextResolved ? now : null)
+                : message,
+          )
+          .toList(growable: false);
+    });
+    try {
+      final updated = nextResolved
+          ? await ref.read(messageServiceProvider).resolve(messageId)
+          : await ref.read(messageServiceProvider).unresolve(messageId);
+      if (!mounted || updated == null) {
+        return;
+      }
+      setState(() {
+        _messages = _ordered(_merge(_messages, [updated]));
+        _memberTimeline = _ordered(_merge(_memberTimeline, [updated]));
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _messages = previous);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_messageFor(error))));
+    }
+  }
+
+  void _handleComposerChanged(String value) {
+    final selection = _composerController.selection;
+    final cursor = selection.baseOffset;
+    if (cursor < 0 || cursor > value.length) {
+      setState(() => _mentionOpen = false);
+      return;
+    }
+    final before = value.substring(0, cursor);
+    final match = RegExp(r'(^|\s)@([A-Za-z0-9._ -]*)$').firstMatch(before);
+    if (match == null) {
+      setState(() => _mentionOpen = false);
+      return;
+    }
+    setState(() {
+      _mentionStart = match.start + match.group(1)!.length;
+      _mentionQuery = match.group(2)!.trim().toLowerCase();
+      _mentionIndex = 0;
+      _mentionOpen = _mentionCandidates.isNotEmpty;
+    });
+  }
+
+  void _insertMention(ProjectMember member) {
+    final user = member.user;
+    final name = user?.name.trim() ?? 'Member';
+    final text = _composerController.text;
+    final selection = _composerController.selection;
+    final end = selection.baseOffset < 0 ? text.length : selection.baseOffset;
+    final start = _mentionStart.clamp(0, end);
+    final next = '${text.substring(0, start)}@$name ${text.substring(end)}';
+    final cursor = start + name.length + 2;
+    _composerController.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: cursor),
+    );
+    setState(() {
+      _mentionedUserIds.add(member.userId);
+      _mentionOpen = false;
+      _mentionQuery = '';
+    });
+    _composerFocus.requestFocus();
+  }
+
+  List<String> _canonicalMentionUserIds(String body) {
+    final membersById = <String, ProjectMember>{
+      for (final member in _project?.members ?? const <ProjectMember>[])
+        member.userId: member,
+    };
+    return _mentionedUserIds
+        .where((id) {
+          final name = membersById[id]?.user?.name.trim();
+          return name != null && name.isNotEmpty && body.contains('@$name');
+        })
+        .toList(growable: false);
+  }
+
+  List<ProjectMember> get _mentionCandidates {
+    final query = _mentionQuery;
+    return (_project?.members ?? const <ProjectMember>[])
+        .where((member) {
+          final name = member.user?.name.toLowerCase() ?? '';
+          final title = member.user?.title.toLowerCase() ?? '';
+          return query.isEmpty || name.contains(query) || title.contains(query);
+        })
+        .take(6)
+        .toList(growable: false);
   }
 
   void _scrollToBottomSoon({bool jump = false}) {
@@ -300,6 +577,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (project == null) {
       return const Scaffold(body: SizedBox.shrink());
     }
+    final auth = ref.watch(authControllerProvider).asData?.value;
+    final currentUser = auth?.user;
+    final currentUserId = currentUser?.id;
+    final isAdmin =
+        currentUser?.isSuperAdmin == true ||
+        project.members.any(
+          (member) =>
+              member.userId == currentUserId &&
+              member.role.toLowerCase() == 'admin',
+        );
 
     return Scaffold(
       backgroundColor: tokens.background,
@@ -322,26 +609,95 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           setState(() => _rightPanelOpen = !_rightPanelOpen);
                         },
                       ),
-                      Expanded(child: _buildMessageList(project)),
-                      _Composer(
-                        controller: _composerController,
-                        focusNode: _composerFocus,
-                        sending: _sending,
-                        onSend: _send,
+                      Expanded(
+                        child: _activeMemberId == null
+                            ? _buildMessageList(project)
+                            : _MemberTimelineView(
+                                project: project,
+                                memberId: _activeMemberId!,
+                                currentUserId: currentUserId,
+                                messages: _memberTimeline,
+                                loading: _timelineLoading,
+                                sending: _sending,
+                                onBack: () => setState(() {
+                                  _activeMemberId = null;
+                                  _memberTimeline = const <Message>[];
+                                }),
+                                onRelay: (body) => _sendRelay(
+                                  targetUserId: _activeMemberId!,
+                                  body: body,
+                                ),
+                                onToggleResolved: _toggleResolved,
+                              ),
                       ),
+                      if (_activeMemberId == null)
+                        _Composer(
+                          controller: _composerController,
+                          focusNode: _composerFocus,
+                          sending: _sending,
+                          broadcastMode: _broadcastMode,
+                          mentionOpen: _mentionOpen,
+                          mentionIndex: _mentionIndex,
+                          mentionCandidates: _mentionCandidates,
+                          onChanged: _handleComposerChanged,
+                          onPickMention: _insertMention,
+                          onToggleBroadcast: () {
+                            setState(() {
+                              _broadcastMode = !_broadcastMode;
+                              if (_broadcastMode) {
+                                _mentionOpen = false;
+                              }
+                            });
+                          },
+                          onSend: _send,
+                        ),
                     ],
                   ),
                 ),
                 if (rightPanelVisible)
                   _RightPanel(
                     project: project,
+                    teamStatus: _teamStatus,
+                    currentUserId: currentUserId,
+                    activeMemberId: _activeMemberId,
+                    isAdmin: isAdmin,
                     onCollapse: () => setState(() => _rightPanelOpen = false),
+                    onSelectMember: (status) {
+                      if (status.userId == currentUserId) {
+                        setState(() {
+                          _activeMemberId = null;
+                          _relayTarget = null;
+                        });
+                        return;
+                      }
+                      if (isAdmin) {
+                        unawaited(_loadMemberTimeline(status.userId));
+                      } else {
+                        setState(() => _relayTarget = status);
+                      }
+                    },
                   ),
               ],
             );
           },
         ),
       ),
+      bottomSheet: _relayTarget == null
+          ? null
+          : _RelaySheet(
+              target: _relayTarget!,
+              onClose: () => setState(() => _relayTarget = null),
+              onSubmit: (body) async {
+                final target = _relayTarget;
+                if (target == null) {
+                  return;
+                }
+                await _sendRelay(targetUserId: target.userId, body: body);
+                if (mounted) {
+                  setState(() => _relayTarget = null);
+                }
+              },
+            ),
     );
   }
 
@@ -418,6 +774,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           project: project,
           currentUserId: currentUserId,
           messagesById: messagesById,
+          myThreadId: _thread?.id,
+          onToggleResolved: _toggleResolved,
+          onRelayReply: (message, body) => _sendRelay(
+            targetUserId: message.recipient?.kind == 'everyone'
+                ? null
+                : message.fromUserId,
+            body: body,
+            repliesToMessageId: message.id,
+          ),
         );
       },
     );
@@ -507,25 +872,59 @@ class _MessageBubble extends StatelessWidget {
     required this.project,
     required this.currentUserId,
     required this.messagesById,
+    required this.onToggleResolved,
+    required this.myThreadId,
+    this.forceExpandedRelay = false,
+    this.onRelayReply,
   });
 
   final Message message;
   final ProjectWithMembers project;
   final String? currentUserId;
   final Map<String, Message> messagesById;
+  final String? myThreadId;
+  final Future<void> Function(String messageId, bool nextResolved)
+  onToggleResolved;
+  final bool forceExpandedRelay;
+  final Future<void> Function(Message message, String body)? onRelayReply;
 
   @override
   Widget build(BuildContext context) {
     final tokens = context.maia;
+    final extra = message.extra;
+    if (message.type == 'maia_note') {
+      final kind = extra?['kind']?.toString();
+      if (kind == 'relay_sent' || kind == 'broadcast_sent') {
+        return _RelayAckPill(message: message, project: project);
+      }
+    }
+    if (message.type == 'maia_summary') {
+      return _SummaryBubble(
+        message: message,
+        currentUserId: currentUserId,
+        messagesById: messagesById,
+        onToggleResolved: onToggleResolved,
+      );
+    }
     final isUser = message.type == 'user_reply';
     final isMaia = !isUser;
     final isRelay = message.type == 'maia_relay';
     final isDigest = message.type == 'maia_digest';
-    final isSummary = message.type == 'maia_summary';
     final isDanger = message.tone == 'danger';
     final body = (message.body ?? '').trim();
     if (body.isEmpty) {
       return const SizedBox.shrink();
+    }
+    final isRecipientRelay =
+        isRelay && currentUserId != null && message.fromUserId != currentUserId;
+    if (isRecipientRelay && !forceExpandedRelay) {
+      return _InboundRelayPill(
+        message: message,
+        project: project,
+        currentUserId: currentUserId,
+        messagesById: messagesById,
+        onRelayReply: onRelayReply,
+      );
     }
 
     final quote = _replyQuote();
@@ -584,7 +983,7 @@ class _MessageBubble extends StatelessWidget {
                           _QuotePreview(quote: quote, inverted: isUser),
                           const SizedBox(height: 8),
                         ],
-                        if (isDigest || isSummary)
+                        if (isDigest)
                           _MessageCardMarkdown(body: body, color: textColor)
                         else
                           MarkdownBody(
@@ -616,12 +1015,30 @@ class _MessageBubble extends StatelessWidget {
                   ),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(4, 4, 4, 0),
-                    child: Text(
-                      DateFormat('h:mm a').format(message.createdAt),
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: tokens.faint,
-                        fontFeatures: const [FontFeature.tabularFigures()],
-                      ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (isDanger && message.threadId == myThreadId) ...[
+                          _ResolveButton(
+                            resolved: message.resolvedAt != null,
+                            onPressed: () => onToggleResolved(
+                              message.id,
+                              message.resolvedAt == null,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                        ],
+                        Text(
+                          DateFormat('h:mm a').format(message.createdAt),
+                          style: Theme.of(context).textTheme.labelSmall
+                              ?.copyWith(
+                                color: tokens.faint,
+                                fontFeatures: const [
+                                  FontFeature.tabularFigures(),
+                                ],
+                              ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
@@ -813,71 +1230,151 @@ class _Composer extends StatelessWidget {
     required this.controller,
     required this.focusNode,
     required this.sending,
+    required this.broadcastMode,
+    required this.mentionOpen,
+    required this.mentionIndex,
+    required this.mentionCandidates,
+    required this.onChanged,
+    required this.onPickMention,
+    required this.onToggleBroadcast,
     required this.onSend,
   });
 
   final TextEditingController controller;
   final FocusNode focusNode;
   final bool sending;
+  final bool broadcastMode;
+  final bool mentionOpen;
+  final int mentionIndex;
+  final List<ProjectMember> mentionCandidates;
+  final ValueChanged<String> onChanged;
+  final ValueChanged<ProjectMember> onPickMention;
+  final VoidCallback onToggleBroadcast;
   final VoidCallback onSend;
 
   @override
   Widget build(BuildContext context) {
     final tokens = context.maia;
     return Container(
-      padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
       decoration: BoxDecoration(
         color: tokens.backgroundRaised,
         border: Border(top: BorderSide(color: tokens.border)),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Expanded(
-            child: TextField(
-              controller: controller,
-              focusNode: focusNode,
-              minLines: 1,
-              maxLines: 6,
-              textInputAction: TextInputAction.newline,
-              style: TextStyle(color: tokens.text),
-              decoration: InputDecoration(
-                hintText: 'Message Maia',
-                hintStyle: TextStyle(color: tokens.faint),
-                filled: true,
-                fillColor: tokens.backgroundCard,
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 12,
+          if (mentionOpen && mentionCandidates.isNotEmpty)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Container(
+                margin: const EdgeInsets.fromLTRB(14, 10, 14, 0),
+                constraints: const BoxConstraints(maxWidth: 360),
+                decoration: BoxDecoration(
+                  color: tokens.backgroundCard,
+                  border: Border.all(color: tokens.border),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(18),
-                  borderSide: BorderSide(color: tokens.border),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(18),
-                  borderSide: BorderSide(color: tokens.border),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(18),
-                  borderSide: BorderSide(color: tokens.accent),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (final entry in mentionCandidates.indexed)
+                      ListTile(
+                        dense: true,
+                        visualDensity: VisualDensity.compact,
+                        selected: entry.$1 == mentionIndex,
+                        leading: AvatarWidget(
+                          name: entry.$2.user?.name ?? 'Member',
+                          avatarUrl: entry.$2.user?.avatarUrl,
+                          size: 26,
+                        ),
+                        title: Text(
+                          entry.$2.user?.name ?? 'Member',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: entry.$2.user?.title.isEmpty ?? true
+                            ? null
+                            : Text(entry.$2.user!.title),
+                        onTap: () => onPickMention(entry.$2),
+                      ),
+                  ],
                 ),
               ),
-              onSubmitted: (_) => onSend(),
             ),
-          ),
-          const SizedBox(width: 10),
-          FilledButton(
-            onPressed: sending ? null : onSend,
-            style: FilledButton.styleFrom(
-              shape: const CircleBorder(),
-              padding: const EdgeInsets.all(14),
-              backgroundColor: tokens.accent,
-              foregroundColor: tokens.accentInk,
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                IconButton.filledTonal(
+                  tooltip: broadcastMode
+                      ? 'Disable broadcast'
+                      : 'Broadcast to everyone',
+                  onPressed: sending ? null : onToggleBroadcast,
+                  style: IconButton.styleFrom(
+                    backgroundColor: broadcastMode
+                        ? tokens.accent
+                        : tokens.backgroundCard,
+                    foregroundColor: broadcastMode
+                        ? tokens.accentInk
+                        : tokens.accent,
+                  ),
+                  icon: const Icon(Icons.campaign_rounded),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: controller,
+                    focusNode: focusNode,
+                    minLines: 1,
+                    maxLines: 6,
+                    textInputAction: TextInputAction.newline,
+                    style: TextStyle(color: tokens.text),
+                    decoration: InputDecoration(
+                      hintText: broadcastMode
+                          ? 'Broadcast to everyone'
+                          : 'Message Maia',
+                      hintStyle: TextStyle(color: tokens.faint),
+                      filled: true,
+                      fillColor: tokens.backgroundCard,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 12,
+                      ),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(18),
+                        borderSide: BorderSide(color: tokens.border),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(18),
+                        borderSide: BorderSide(
+                          color: broadcastMode ? tokens.accent : tokens.border,
+                        ),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(18),
+                        borderSide: BorderSide(color: tokens.accent),
+                      ),
+                    ),
+                    onChanged: onChanged,
+                    onSubmitted: (_) => onSend(),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                FilledButton(
+                  onPressed: sending ? null : onSend,
+                  style: FilledButton.styleFrom(
+                    shape: const CircleBorder(),
+                    padding: const EdgeInsets.all(14),
+                    backgroundColor: tokens.accent,
+                    foregroundColor: tokens.accentInk,
+                  ),
+                  child: sending
+                      ? const SpinnerWidget(size: 18)
+                      : const Icon(Icons.arrow_upward_rounded),
+                ),
+              ],
             ),
-            child: sending
-                ? const SpinnerWidget(size: 18)
-                : const Icon(Icons.arrow_upward_rounded),
           ),
         ],
       ),
@@ -886,10 +1383,23 @@ class _Composer extends StatelessWidget {
 }
 
 class _RightPanel extends StatelessWidget {
-  const _RightPanel({required this.project, required this.onCollapse});
+  const _RightPanel({
+    required this.project,
+    required this.teamStatus,
+    required this.currentUserId,
+    required this.activeMemberId,
+    required this.isAdmin,
+    required this.onCollapse,
+    required this.onSelectMember,
+  });
 
   final ProjectWithMembers project;
+  final List<MemberStatus> teamStatus;
+  final String? currentUserId;
+  final String? activeMemberId;
+  final bool isAdmin;
   final VoidCallback onCollapse;
+  final ValueChanged<MemberStatus> onSelectMember;
 
   @override
   Widget build(BuildContext context) {
@@ -949,17 +1459,21 @@ class _RightPanel extends StatelessWidget {
           Expanded(
             child: ListView.separated(
               padding: const EdgeInsets.fromLTRB(14, 0, 14, 16),
-              itemCount: project.members.length,
+              itemCount: _statuses.length,
               separatorBuilder: (context, index) => const SizedBox(height: 4),
               itemBuilder: (context, index) {
-                final member = project.members[index];
-                final name = member.user?.name ?? 'Member';
+                final status = _statuses[index];
+                final name = status.user.name;
+                final selected =
+                    status.userId == activeMemberId ||
+                    (status.userId == currentUserId && activeMemberId == null);
                 return ListTile(
+                  selected: selected,
                   dense: true,
                   contentPadding: const EdgeInsets.symmetric(horizontal: 4),
                   leading: AvatarWidget(
                     name: name,
-                    avatarUrl: member.user?.avatarUrl,
+                    avatarUrl: status.user.avatarUrl,
                     size: 30,
                   ),
                   title: Text(
@@ -968,10 +1482,29 @@ class _RightPanel extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(color: tokens.text),
                   ),
-                  subtitle: Text(
-                    member.role,
-                    style: TextStyle(color: tokens.faint),
+                  subtitle: Wrap(
+                    spacing: 6,
+                    runSpacing: 2,
+                    children: [
+                      Text(status.role, style: TextStyle(color: tokens.faint)),
+                      if (status.hasBlocker)
+                        Text(
+                          '${status.blockerCount} blocker${status.blockerCount == 1 ? '' : 's'}',
+                          style: TextStyle(color: tokens.danger),
+                        ),
+                      if (status.relaysWithYou > 0)
+                        Text(
+                          '${status.relaysWithYou} relay${status.relaysWithYou == 1 ? '' : 's'}',
+                          style: TextStyle(color: tokens.accent),
+                        ),
+                    ],
                   ),
+                  trailing: Icon(
+                    isAdmin ? Icons.timeline_rounded : Icons.send_rounded,
+                    size: 16,
+                    color: tokens.faint,
+                  ),
+                  onTap: () => onSelectMember(status),
                 );
               },
             ),
@@ -980,6 +1513,965 @@ class _RightPanel extends StatelessWidget {
       ),
     );
   }
+
+  List<MemberStatus> get _statuses {
+    if (teamStatus.isNotEmpty) {
+      return teamStatus;
+    }
+    return project.members
+        .map(
+          (member) => MemberStatus(
+            userId: member.userId,
+            user:
+                member.user ??
+                User(
+                  id: member.userId,
+                  email: '',
+                  name: 'Member',
+                  title: '',
+                  timezone: '',
+                  avatarUrl: null,
+                  isActive: true,
+                  isSuperAdmin: false,
+                  createdAt: member.createdAt,
+                  updatedAt: member.createdAt,
+                ),
+            role: member.role,
+            checkedIn: false,
+            hasBlocker: false,
+            relayCount: 0,
+            blockerCount: 0,
+            relaysWithYou: 0,
+            lastActive: null,
+          ),
+        )
+        .toList(growable: false);
+  }
+}
+
+class _BroadcastConfirmDialog extends StatelessWidget {
+  const _BroadcastConfirmDialog({required this.project, required this.preview});
+
+  final ProjectWithMembers project;
+  final String preview;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.maia;
+    final audienceSize = (project.members.length - 1).clamp(0, 9999);
+    return AlertDialog(
+      backgroundColor: tokens.backgroundRaised,
+      title: Row(
+        children: [
+          Icon(Icons.campaign_rounded, color: tokens.accent),
+          const SizedBox(width: 8),
+          const Text('Broadcast to the team?'),
+        ],
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'This will go to $audienceSize teammate${audienceSize == 1 ? '' : 's'} in ${project.name}.',
+          ),
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: tokens.backgroundCard,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: tokens.accent),
+            ),
+            child: Text(preview),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(true),
+          child: const Text('Send broadcast'),
+        ),
+      ],
+    );
+  }
+}
+
+class _RelaySheet extends StatefulWidget {
+  const _RelaySheet({
+    required this.target,
+    required this.onClose,
+    required this.onSubmit,
+  });
+
+  final MemberStatus target;
+  final VoidCallback onClose;
+  final Future<void> Function(String body) onSubmit;
+
+  @override
+  State<_RelaySheet> createState() => _RelaySheetState();
+}
+
+class _RelaySheetState extends State<_RelaySheet> {
+  final _controller = TextEditingController();
+  bool _sending = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final body = _controller.text.trim();
+    if (body.isEmpty || _sending) {
+      return;
+    }
+    setState(() => _sending = true);
+    await widget.onSubmit(body);
+    if (mounted) {
+      setState(() => _sending = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.maia;
+    final firstName = widget.target.user.name.split(' ').first;
+    return Material(
+      color: Colors.black.withValues(alpha: 0.28),
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+          decoration: BoxDecoration(
+            color: tokens.backgroundRaised,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            border: Border(top: BorderSide(color: tokens.border)),
+          ),
+          child: SafeArea(
+            top: false,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    AvatarWidget(
+                      name: widget.target.user.name,
+                      avatarUrl: widget.target.user.avatarUrl,
+                      size: 36,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.target.user.name,
+                            style: const TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                          Text(
+                            widget.target.relaysWithYou > 0
+                                ? '${widget.target.relaysWithYou} relay${widget.target.relaysWithYou == 1 ? '' : 's'} between you'
+                                : 'Send your first relay',
+                            style: TextStyle(color: tokens.dim, fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Close',
+                      onPressed: _sending ? null : widget.onClose,
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: _controller,
+                  autofocus: true,
+                  minLines: 3,
+                  maxLines: 5,
+                  decoration: InputDecoration(
+                    hintText:
+                        'Write casually. Maia will rephrase for $firstName.',
+                    filled: true,
+                    fillColor: tokens.backgroundCard,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: _sending ? null : widget.onClose,
+                        child: const Text('Cancel'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: _sending ? null : _submit,
+                        icon: _sending
+                            ? const SpinnerWidget(size: 16)
+                            : const Icon(Icons.send_rounded),
+                        label: const Text('Send via Maia'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MemberTimelineView extends StatefulWidget {
+  const _MemberTimelineView({
+    required this.project,
+    required this.memberId,
+    required this.currentUserId,
+    required this.messages,
+    required this.loading,
+    required this.sending,
+    required this.onBack,
+    required this.onRelay,
+    required this.onToggleResolved,
+  });
+
+  final ProjectWithMembers project;
+  final String memberId;
+  final String? currentUserId;
+  final List<Message> messages;
+  final bool loading;
+  final bool sending;
+  final VoidCallback onBack;
+  final Future<void> Function(String body) onRelay;
+  final Future<void> Function(String messageId, bool nextResolved)
+  onToggleResolved;
+
+  @override
+  State<_MemberTimelineView> createState() => _MemberTimelineViewState();
+}
+
+class _MemberTimelineViewState extends State<_MemberTimelineView> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.maia;
+    ProjectMember? member;
+    for (final item in widget.project.members) {
+      if (item.userId == widget.memberId) {
+        member = item;
+        break;
+      }
+    }
+    final user = member?.user;
+    final name = user?.name ?? 'Member';
+    final messagesById = {
+      for (final message in widget.messages) message.id: message,
+    };
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            border: Border(bottom: BorderSide(color: tokens.border)),
+          ),
+          child: Row(
+            children: [
+              IconButton(
+                tooltip: 'Back to chat',
+                onPressed: widget.onBack,
+                icon: const Icon(Icons.arrow_back_rounded),
+              ),
+              AvatarWidget(name: name, avatarUrl: user?.avatarUrl, size: 28),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  name,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: widget.loading && widget.messages.isEmpty
+              ? const Center(child: SpinnerWidget())
+              : ListView.builder(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 18),
+                  itemCount: widget.messages.length,
+                  itemBuilder: (context, index) => _MessageBubble(
+                    message: widget.messages[index],
+                    project: widget.project,
+                    currentUserId: widget.currentUserId,
+                    messagesById: messagesById,
+                    myThreadId: null,
+                    onToggleResolved: widget.onToggleResolved,
+                  ),
+                ),
+        ),
+        Container(
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
+          decoration: BoxDecoration(
+            border: Border(top: BorderSide(color: tokens.border)),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _controller,
+                  decoration: InputDecoration(
+                    hintText: 'Relay to ${name.split(' ').first}',
+                    filled: true,
+                    fillColor: tokens.backgroundCard,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                  ),
+                  onSubmitted: (_) async {
+                    final body = _controller.text;
+                    _controller.clear();
+                    await widget.onRelay(body);
+                  },
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton.filled(
+                onPressed: widget.sending
+                    ? null
+                    : () async {
+                        final body = _controller.text;
+                        _controller.clear();
+                        await widget.onRelay(body);
+                      },
+                icon: widget.sending
+                    ? const SpinnerWidget(size: 16)
+                    : const Icon(Icons.send_rounded),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _RelayAckPill extends StatefulWidget {
+  const _RelayAckPill({required this.message, required this.project});
+
+  final Message message;
+  final ProjectWithMembers project;
+
+  @override
+  State<_RelayAckPill> createState() => _RelayAckPillState();
+}
+
+class _RelayAckPillState extends State<_RelayAckPill> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.maia;
+    final extra = widget.message.extra ?? const <String, dynamic>{};
+    final kind = extra['kind']?.toString();
+    final broadcast = kind == 'broadcast_sent';
+    final targetName = extra['target_name']?.toString();
+    final sentBody = extra['sent_body']?.toString();
+    final audienceSize = extra['audience_size']?.toString();
+    final label = broadcast
+        ? 'Broadcast to ${audienceSize ?? 'team'}'
+        : 'Relayed to ${targetName?.split(' ').first ?? 'teammate'}';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ActionChip(
+              avatar: Icon(
+                broadcast ? Icons.campaign_rounded : Icons.call_made_rounded,
+                size: 16,
+                color: tokens.accent,
+              ),
+              label: Text(label),
+              onPressed: () => setState(() => _expanded = !_expanded),
+              backgroundColor: tokens.accent.withValues(alpha: 0.10),
+              side: BorderSide(color: tokens.accent.withValues(alpha: 0.32)),
+            ),
+            if (_expanded && sentBody != null && sentBody.isNotEmpty)
+              Container(
+                margin: const EdgeInsets.only(top: 4),
+                constraints: const BoxConstraints(maxWidth: 520),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: tokens.backgroundCard,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: tokens.border),
+                ),
+                child: Text(sentBody),
+              ),
+            Padding(
+              padding: const EdgeInsets.only(left: 6, top: 2),
+              child: Text(
+                DateFormat('h:mm a').format(widget.message.createdAt),
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: tokens.faint,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _InboundRelayPill extends StatefulWidget {
+  const _InboundRelayPill({
+    required this.message,
+    required this.project,
+    required this.currentUserId,
+    required this.messagesById,
+    required this.onRelayReply,
+  });
+
+  final Message message;
+  final ProjectWithMembers project;
+  final String? currentUserId;
+  final Map<String, Message> messagesById;
+  final Future<void> Function(Message message, String body)? onRelayReply;
+
+  @override
+  State<_InboundRelayPill> createState() => _InboundRelayPillState();
+}
+
+class _InboundRelayPillState extends State<_InboundRelayPill> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (_expanded) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _MessageBubble(
+            message: widget.message,
+            project: widget.project,
+            currentUserId: widget.currentUserId,
+            messagesById: widget.messagesById,
+            myThreadId: null,
+            onToggleResolved: (messageId, nextResolved) async {},
+            forceExpandedRelay: true,
+          ),
+          if (widget.onRelayReply != null)
+            _InlineRelayReplyComposer(
+              onSubmit: (body) => widget.onRelayReply!(widget.message, body),
+            ),
+        ],
+      );
+    }
+    final tokens = context.maia;
+    final isBroadcast =
+        widget.message.recipient?.kind == 'everyone' ||
+        widget.message.toAudience == 'everyone';
+    final sender =
+        _memberName(
+          widget.project,
+          widget.message.fromUserId,
+        )?.split(' ').first ??
+        'Teammate';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ActionChip(
+              avatar: Icon(
+                isBroadcast
+                    ? Icons.campaign_rounded
+                    : Icons.call_received_rounded,
+                color: tokens.accentInk,
+                size: 16,
+              ),
+              label: Text(
+                isBroadcast ? 'Broadcast from $sender' : 'Relay from $sender',
+              ),
+              onPressed: () => setState(() => _expanded = true),
+              backgroundColor: tokens.accent,
+              labelStyle: TextStyle(color: tokens.accentInk),
+              side: BorderSide(color: tokens.accent),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(left: 6, top: 2),
+              child: Text(
+                DateFormat('h:mm a').format(widget.message.createdAt),
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: tokens.faint,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _InlineRelayReplyComposer extends StatefulWidget {
+  const _InlineRelayReplyComposer({required this.onSubmit});
+
+  final Future<void> Function(String body) onSubmit;
+
+  @override
+  State<_InlineRelayReplyComposer> createState() =>
+      _InlineRelayReplyComposerState();
+}
+
+class _InlineRelayReplyComposerState extends State<_InlineRelayReplyComposer> {
+  final _controller = TextEditingController();
+  bool _sending = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final body = _controller.text.trim();
+    if (body.isEmpty || _sending) {
+      return;
+    }
+    setState(() => _sending = true);
+    await widget.onSubmit(body);
+    if (mounted) {
+      _controller.clear();
+      setState(() => _sending = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.maia;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(44, 2, 16, 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _controller,
+              minLines: 1,
+              maxLines: 3,
+              decoration: InputDecoration(
+                hintText: 'Reply via Maia',
+                filled: true,
+                fillColor: tokens.backgroundCard,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+              ),
+              onSubmitted: (_) => _submit(),
+            ),
+          ),
+          const SizedBox(width: 6),
+          IconButton.filledTonal(
+            tooltip: 'Reply',
+            onPressed: _sending ? null : _submit,
+            icon: _sending
+                ? const SpinnerWidget(size: 14)
+                : const Icon(Icons.reply_rounded),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SummaryBubble extends StatefulWidget {
+  const _SummaryBubble({
+    required this.message,
+    required this.currentUserId,
+    required this.messagesById,
+    required this.onToggleResolved,
+  });
+
+  final Message message;
+  final String? currentUserId;
+  final Map<String, Message> messagesById;
+  final Future<void> Function(String messageId, bool nextResolved)
+  onToggleResolved;
+
+  @override
+  State<_SummaryBubble> createState() => _SummaryBubbleState();
+}
+
+class _SummaryBubbleState extends State<_SummaryBubble> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.maia;
+    final extra = widget.message.extra ?? const <String, dynamic>{};
+    final summary = _mapValue(extra['summary']);
+    final aboutName = extra['about_user_name']?.toString() ?? 'Member';
+    final aboutUserId = extra['about_user_id']?.toString();
+    final firstName = aboutName.split(' ').first;
+    final done = _stringItems(summary['done']);
+    final blocked = _blockedItems(summary['blocked']);
+    final next = _stringItems(summary['next']);
+    final highlight = summary['highlight']?.toString().trim() ?? '';
+    if (done.isEmpty && blocked.isEmpty && next.isEmpty && highlight.isEmpty) {
+      final checkedIn = summary['checked_in'] == true;
+      final text = summary['checked_in'] == false
+          ? "$firstName didn't check in today."
+          : checkedIn
+          ? 'Quiet day for $firstName. Nothing to log.'
+          : 'No activity to summarize.';
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Text(
+          text,
+          style: TextStyle(color: tokens.dim, fontStyle: FontStyle.italic),
+        ),
+      );
+    }
+    final canResolve =
+        widget.currentUserId != null &&
+        aboutUserId != null &&
+        widget.currentUserId == aboutUserId;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 620),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ActionChip(
+                avatar: Icon(
+                  Icons.fact_check_rounded,
+                  color: blocked.isEmpty ? tokens.accent : tokens.danger,
+                  size: 16,
+                ),
+                label: Text('$firstName · daily check-in'),
+                onPressed: () => setState(() => _expanded = !_expanded),
+                backgroundColor: tokens.backgroundCard,
+                side: BorderSide(
+                  color: blocked.isEmpty ? tokens.border : tokens.danger,
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(6, 2, 6, 4),
+                child: Wrap(
+                  spacing: 8,
+                  children: [
+                    if (done.isNotEmpty)
+                      Text(
+                        '${done.length} done',
+                        style: TextStyle(color: tokens.success),
+                      ),
+                    if (blocked.isNotEmpty)
+                      Text(
+                        '${blocked.length} blocker${blocked.length == 1 ? '' : 's'}',
+                        style: TextStyle(color: tokens.danger),
+                      ),
+                    if (next.isNotEmpty)
+                      Text(
+                        '${next.length} next',
+                        style: TextStyle(color: tokens.dim),
+                      ),
+                    Text(
+                      DateFormat('h:mm a').format(widget.message.createdAt),
+                      style: TextStyle(color: tokens.faint),
+                    ),
+                  ],
+                ),
+              ),
+              if (_expanded)
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: tokens.backgroundCard,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: blocked.isEmpty ? tokens.border : tokens.danger,
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (highlight.isNotEmpty) ...[
+                        Text(
+                          highlight,
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 8),
+                      ],
+                      _SummarySection(
+                        title: 'Done',
+                        items: done,
+                        color: tokens.success,
+                      ),
+                      if (blocked.isNotEmpty)
+                        _BlockedSummarySection(
+                          items: blocked,
+                          messagesById: widget.messagesById,
+                          canResolve: canResolve,
+                          onToggleResolved: widget.onToggleResolved,
+                        ),
+                      _SummarySection(
+                        title: 'Next',
+                        items: next,
+                        color: tokens.accent,
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SummarySection extends StatelessWidget {
+  const _SummarySection({
+    required this.title,
+    required this.items,
+    required this.color,
+  });
+
+  final String title;
+  final List<String> items;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    if (items.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: TextStyle(
+              color: color,
+              fontWeight: FontWeight.w800,
+              fontSize: 12,
+            ),
+          ),
+          for (final item in items)
+            Padding(
+              padding: const EdgeInsets.only(top: 3),
+              child: Text('• $item'),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BlockedSummarySection extends StatelessWidget {
+  const _BlockedSummarySection({
+    required this.items,
+    required this.messagesById,
+    required this.canResolve,
+    required this.onToggleResolved,
+  });
+
+  final List<_BlockedItem> items;
+  final Map<String, Message> messagesById;
+  final bool canResolve;
+  final Future<void> Function(String messageId, bool nextResolved)
+  onToggleResolved;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.maia;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Blocked',
+            style: TextStyle(
+              color: tokens.danger,
+              fontWeight: FontWeight.w800,
+              fontSize: 12,
+            ),
+          ),
+          for (final item in items)
+            Padding(
+              padding: const EdgeInsets.only(top: 5),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (canResolve && item.sourceMessageIds.isNotEmpty)
+                    _ResolveButton(
+                      resolved:
+                          item.allResolved ??
+                          item.sourceMessageIds.every(
+                            (id) => messagesById[id]?.resolvedAt != null,
+                          ),
+                      onPressed: () {
+                        final resolved =
+                            item.allResolved ??
+                            item.sourceMessageIds.every(
+                              (id) => messagesById[id]?.resolvedAt != null,
+                            );
+                        for (final id in item.sourceMessageIds) {
+                          unawaited(onToggleResolved(id, !resolved));
+                        }
+                      },
+                    )
+                  else
+                    Text('• ', style: TextStyle(color: tokens.danger)),
+                  const SizedBox(width: 5),
+                  Expanded(
+                    child: Text(
+                      item.text,
+                      style: TextStyle(
+                        decoration: (item.allResolved ?? false)
+                            ? TextDecoration.lineThrough
+                            : null,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ResolveButton extends StatelessWidget {
+  const _ResolveButton({required this.resolved, required this.onPressed});
+
+  final bool resolved;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.maia;
+    return Tooltip(
+      message: resolved ? 'Reflag' : 'Mark resolved',
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(12),
+        child: Icon(
+          resolved ? Icons.undo_rounded : Icons.check_circle_rounded,
+          size: 18,
+          color: resolved ? tokens.success : tokens.danger,
+        ),
+      ),
+    );
+  }
+}
+
+class _BlockedItem {
+  const _BlockedItem({
+    required this.text,
+    required this.sourceMessageIds,
+    required this.allResolved,
+  });
+
+  final String text;
+  final List<String> sourceMessageIds;
+  final bool? allResolved;
+}
+
+Map<String, dynamic> _mapValue(Object? value) {
+  if (value is Map<String, dynamic>) {
+    return value;
+  }
+  if (value is Map) {
+    return value.map((key, value) => MapEntry('$key', value));
+  }
+  return <String, dynamic>{};
+}
+
+List<String> _stringItems(Object? value) {
+  if (value is List) {
+    return value.map((item) => item.toString()).toList(growable: false);
+  }
+  return const <String>[];
+}
+
+List<_BlockedItem> _blockedItems(Object? value) {
+  if (value is! List) {
+    return const <_BlockedItem>[];
+  }
+  return value
+      .map((item) {
+        if (item is String) {
+          return _BlockedItem(
+            text: item,
+            sourceMessageIds: const <String>[],
+            allResolved: null,
+          );
+        }
+        final data = _mapValue(item);
+        return _BlockedItem(
+          text: data['text']?.toString() ?? '',
+          sourceMessageIds: _stringItems(data['source_message_ids']),
+          allResolved: data['all_resolved'] is bool
+              ? data['all_resolved'] as bool
+              : null,
+        );
+      })
+      .where((item) => item.text.trim().isNotEmpty)
+      .toList(growable: false);
+}
+
+String? _memberName(ProjectWithMembers project, String? userId) {
+  if (userId == null) {
+    return null;
+  }
+  for (final member in project.members) {
+    if (member.userId == userId) {
+      return member.user?.name;
+    }
+  }
+  return null;
 }
 
 class _ErrorState extends StatelessWidget {

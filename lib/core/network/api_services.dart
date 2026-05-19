@@ -124,6 +124,22 @@ class ProjectService {
     );
   }
 
+  Future<List<MemberStatus>> teamStatus(String projectId) async {
+    final response = await client.get<List<dynamic>>(
+      '/projects/${Uri.encodeComponent(projectId)}/team-status',
+    );
+    return response?.map(MemberStatus.fromJson).toList(growable: false) ??
+        <MemberStatus>[];
+  }
+
+  Future<List<Message>> memberTimeline(String projectId, String userId) async {
+    final response = await client.get<List<dynamic>>(
+      '/projects/${Uri.encodeComponent(projectId)}/members/${Uri.encodeComponent(userId)}/timeline',
+    );
+    return response?.map(Message.fromJson).toList(growable: false) ??
+        <Message>[];
+  }
+
   Future<Project?> update(
     String projectId, {
     String? name,
@@ -217,13 +233,77 @@ class MessageService {
 
   final ApiClient client;
 
-  Future<List<Message>> sendToThread(String threadId, String body) async {
+  Future<List<Message>> sendToThread(
+    String threadId,
+    String body, {
+    List<String> mentionUserIds = const <String>[],
+    String? repliesToMessageId,
+  }) async {
+    final payload = <String, dynamic>{'body': body};
+    if (mentionUserIds.isNotEmpty) {
+      payload['mention_user_ids'] = mentionUserIds;
+    }
+    if (repliesToMessageId != null && repliesToMessageId.isNotEmpty) {
+      payload['replies_to_message_id'] = repliesToMessageId;
+    }
     final response = await client.post<List<dynamic>>(
       '/messages/thread/${Uri.encodeComponent(threadId)}',
-      body: <String, dynamic>{'body': body},
+      body: payload,
     );
     return response?.map(Message.fromJson).toList(growable: false) ??
         <Message>[];
+  }
+
+  Future<List<Message>> relay({
+    required String projectId,
+    String? targetUserId,
+    required String body,
+    String? repliesToMessageId,
+  }) async {
+    final payload = <String, dynamic>{'body': body};
+    if (targetUserId != null && targetUserId.isNotEmpty) {
+      payload['target_user_id'] = targetUserId;
+    }
+    if (repliesToMessageId != null && repliesToMessageId.isNotEmpty) {
+      payload['replies_to_message_id'] = repliesToMessageId;
+    }
+    final response = await client.post<List<dynamic>>(
+      '/messages/relay/${Uri.encodeComponent(projectId)}',
+      body: payload,
+    );
+    return response?.map(Message.fromJson).toList(growable: false) ??
+        <Message>[];
+  }
+
+  Future<List<Message>> broadcast({
+    required String projectId,
+    required String body,
+    String? repliesToMessageId,
+  }) async {
+    final payload = <String, dynamic>{'body': body};
+    if (repliesToMessageId != null && repliesToMessageId.isNotEmpty) {
+      payload['replies_to_message_id'] = repliesToMessageId;
+    }
+    final response = await client.post<List<dynamic>>(
+      '/messages/broadcast/${Uri.encodeComponent(projectId)}',
+      body: payload,
+    );
+    return response?.map(Message.fromJson).toList(growable: false) ??
+        <Message>[];
+  }
+
+  Future<Message?> resolve(String messageId) {
+    return client.post(
+      '/messages/${Uri.encodeComponent(messageId)}/resolve',
+      parse: Message.fromJson,
+    );
+  }
+
+  Future<Message?> unresolve(String messageId) {
+    return client.post(
+      '/messages/${Uri.encodeComponent(messageId)}/unresolve',
+      parse: Message.fromJson,
+    );
   }
 }
 
@@ -282,6 +362,14 @@ class SearchService {
   const SearchService(this.client);
 
   final ApiClient client;
+
+  Future<SearchResponse?> messages(String projectId, String query) {
+    return client.get(
+      '/search/messages/${Uri.encodeComponent(projectId)}',
+      queryParameters: <String, dynamic>{'q': query},
+      parse: SearchResponse.fromJson,
+    );
+  }
 }
 
 class PushService {

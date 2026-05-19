@@ -84,6 +84,10 @@ final adminServiceProvider = Provider<AdminService>((ref) {
   return AdminService(ref.watch(apiClientProvider));
 });
 
+final searchServiceProvider = Provider<SearchService>((ref) {
+  return SearchService(ref.watch(apiClientProvider));
+});
+
 final authControllerProvider = AsyncNotifierProvider<AuthController, AuthState>(
   AuthController.new,
 );

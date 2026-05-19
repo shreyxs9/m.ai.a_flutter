@@ -1,5 +1,7 @@
 typedef JsonMap = Map<String, dynamic>;
 
+const Object _sentinel = Object();
+
 JsonMap _map(Object? value) {
   if (value is Map<String, dynamic>) {
     return value;
@@ -112,17 +114,17 @@ class User {
   final DateTime updatedAt;
 
   JsonMap toJson() => {
-        'id': id,
-        'email': email,
-        'name': name,
-        'title': title,
-        'timezone': timezone,
-        'avatar_url': avatarUrl,
-        'is_active': isActive,
-        'is_super_admin': isSuperAdmin,
-        'created_at': _dateToJson(createdAt),
-        'updated_at': _dateToJson(updatedAt),
-      };
+    'id': id,
+    'email': email,
+    'name': name,
+    'title': title,
+    'timezone': timezone,
+    'avatar_url': avatarUrl,
+    'is_active': isActive,
+    'is_super_admin': isSuperAdmin,
+    'created_at': _dateToJson(createdAt),
+    'updated_at': _dateToJson(updatedAt),
+  };
 }
 
 class Tenant {
@@ -158,14 +160,14 @@ class Tenant {
   final DateTime updatedAt;
 
   JsonMap toJson() => {
-        'id': id,
-        'name': name,
-        'slug': slug,
-        'invite_code': inviteCode,
-        'settings': settings,
-        'created_at': _dateToJson(createdAt),
-        'updated_at': _dateToJson(updatedAt),
-      };
+    'id': id,
+    'name': name,
+    'slug': slug,
+    'invite_code': inviteCode,
+    'settings': settings,
+    'created_at': _dateToJson(createdAt),
+    'updated_at': _dateToJson(updatedAt),
+  };
 }
 
 class TenantPreview {
@@ -188,18 +190,11 @@ class TenantPreview {
   final String name;
   final bool alreadyMember;
 
-  JsonMap toJson() => {
-        'id': id,
-        'name': name,
-        'already_member': alreadyMember,
-      };
+  JsonMap toJson() => {'id': id, 'name': name, 'already_member': alreadyMember};
 }
 
 class TenantJoinResult {
-  const TenantJoinResult({
-    required this.tenantId,
-    required this.joined,
-  });
+  const TenantJoinResult({required this.tenantId, required this.joined});
 
   factory TenantJoinResult.fromJson(Object? json) {
     final data = _map(json);
@@ -212,10 +207,7 @@ class TenantJoinResult {
   final String tenantId;
   final bool joined;
 
-  JsonMap toJson() => {
-        'tenant_id': tenantId,
-        'joined': joined,
-      };
+  JsonMap toJson() => {'tenant_id': tenantId, 'joined': joined};
 }
 
 class JoinByInviteResult {
@@ -242,11 +234,11 @@ class JoinByInviteResult {
   final bool alreadyMember;
 
   JsonMap toJson() => {
-        'tenant_id': tenantId,
-        'project_id': projectId,
-        'project_name': projectName,
-        'already_member': alreadyMember,
-      };
+    'tenant_id': tenantId,
+    'project_id': projectId,
+    'project_name': projectName,
+    'already_member': alreadyMember,
+  };
 }
 
 class Project {
@@ -306,22 +298,22 @@ class Project {
   final DateTime updatedAt;
 
   JsonMap toJson() => {
-        'id': id,
-        'tenant_id': tenantId,
-        'name': name,
-        'code': code,
-        'invite_code': inviteCode,
-        'accent_color': accentColor,
-        'icon': icon,
-        'description': description,
-        'checkin_time': checkinTime,
-        'checkin_timezone': checkinTimezone,
-        'digest_delay_minutes': digestDelayMinutes,
-        'is_archived': isArchived,
-        'created_by': createdBy,
-        'created_at': _dateToJson(createdAt),
-        'updated_at': _dateToJson(updatedAt),
-      };
+    'id': id,
+    'tenant_id': tenantId,
+    'name': name,
+    'code': code,
+    'invite_code': inviteCode,
+    'accent_color': accentColor,
+    'icon': icon,
+    'description': description,
+    'checkin_time': checkinTime,
+    'checkin_timezone': checkinTimezone,
+    'digest_delay_minutes': digestDelayMinutes,
+    'is_archived': isArchived,
+    'created_by': createdBy,
+    'created_at': _dateToJson(createdAt),
+    'updated_at': _dateToJson(updatedAt),
+  };
 }
 
 class ProjectMember {
@@ -359,14 +351,14 @@ class ProjectMember {
   final User? user;
 
   JsonMap toJson() => {
-        'id': id,
-        'project_id': projectId,
-        'user_id': userId,
-        'role': role,
-        'checkin_enabled': checkinEnabled,
-        'created_at': _dateToJson(createdAt),
-        if (user != null) 'user': user!.toJson(),
-      };
+    'id': id,
+    'project_id': projectId,
+    'user_id': userId,
+    'role': role,
+    'checkin_enabled': checkinEnabled,
+    'created_at': _dateToJson(createdAt),
+    if (user != null) 'user': user!.toJson(),
+  };
 }
 
 class ProjectWithMembers extends Project {
@@ -416,16 +408,13 @@ class ProjectWithMembers extends Project {
 
   @override
   JsonMap toJson() => {
-        ...super.toJson(),
-        'members': members.map((member) => member.toJson()).toList(),
-      };
+    ...super.toJson(),
+    'members': members.map((member) => member.toJson()).toList(),
+  };
 }
 
 class ProjectMemberPreview {
-  const ProjectMemberPreview({
-    required this.name,
-    required this.avatarUrl,
-  });
+  const ProjectMemberPreview({required this.name, required this.avatarUrl});
 
   factory ProjectMemberPreview.fromJson(Object? json) {
     final data = _map(json);
@@ -438,10 +427,7 @@ class ProjectMemberPreview {
   final String name;
   final String? avatarUrl;
 
-  JsonMap toJson() => {
-        'name': name,
-        'avatar_url': avatarUrl,
-      };
+  JsonMap toJson() => {'name': name, 'avatar_url': avatarUrl};
 }
 
 class ProjectListItem extends Project {
@@ -506,13 +492,13 @@ class ProjectListItem extends Project {
 
   @override
   JsonMap toJson() => {
-        ...super.toJson(),
-        'member_count': memberCount,
-        'last_message_preview': lastMessagePreview,
-        'last_message_ts': _nullableDateToJson(lastMessageTs),
-        'member_previews': memberPreviews.map((item) => item.toJson()).toList(),
-        'blocker_count': blockerCount,
-      };
+    ...super.toJson(),
+    'member_count': memberCount,
+    'last_message_preview': lastMessagePreview,
+    'last_message_ts': _nullableDateToJson(lastMessageTs),
+    'member_previews': memberPreviews.map((item) => item.toJson()).toList(),
+    'blocker_count': blockerCount,
+  };
 }
 
 class Thread {
@@ -542,19 +528,16 @@ class Thread {
   final DateTime updatedAt;
 
   JsonMap toJson() => {
-        'id': id,
-        'project_id': projectId,
-        'user_id': userId,
-        'created_at': _dateToJson(createdAt),
-        'updated_at': _dateToJson(updatedAt),
-      };
+    'id': id,
+    'project_id': projectId,
+    'user_id': userId,
+    'created_at': _dateToJson(createdAt),
+    'updated_at': _dateToJson(updatedAt),
+  };
 }
 
 class Recipient {
-  const Recipient({
-    required this.kind,
-    this.userId,
-  });
+  const Recipient({required this.kind, this.userId});
 
   factory Recipient.fromJson(Object? json) {
     final data = _map(json);
@@ -567,10 +550,7 @@ class Recipient {
   final String kind;
   final String? userId;
 
-  JsonMap toJson() => {
-        'kind': kind,
-        if (userId != null) 'user_id': userId,
-      };
+  JsonMap toJson() => {'kind': kind, if (userId != null) 'user_id': userId};
 }
 
 class ReplyPreview {
@@ -597,11 +577,11 @@ class ReplyPreview {
   final String? toUserId;
 
   JsonMap toJson() => {
-        'id': id,
-        'body_snippet': bodySnippet,
-        'from_user_id': fromUserId,
-        'to_user_id': toUserId,
-      };
+    'id': id,
+    'body_snippet': bodySnippet,
+    'from_user_id': fromUserId,
+    'to_user_id': toUserId,
+  };
 }
 
 class Message {
@@ -667,24 +647,78 @@ class Message {
   final DateTime createdAt;
   final DateTime? resolvedAt;
 
+  Message copyWith({
+    String? id,
+    String? threadId,
+    String? type,
+    Object? body = _sentinel,
+    Object? tone = _sentinel,
+    Object? fromUserId = _sentinel,
+    Object? toUserId = _sentinel,
+    Object? toAudience = _sentinel,
+    Object? recipient = _sentinel,
+    Object? repliesToMessageId = _sentinel,
+    Object? replyToPreview = _sentinel,
+    Object? originalText = _sentinel,
+    Object? extra = _sentinel,
+    Object? promptVersionId = _sentinel,
+    DateTime? createdAt,
+    Object? resolvedAt = _sentinel,
+  }) {
+    return Message(
+      id: id ?? this.id,
+      threadId: threadId ?? this.threadId,
+      type: type ?? this.type,
+      body: body == _sentinel ? this.body : body as String?,
+      tone: tone == _sentinel ? this.tone : tone as String?,
+      fromUserId: fromUserId == _sentinel
+          ? this.fromUserId
+          : fromUserId as String?,
+      toUserId: toUserId == _sentinel ? this.toUserId : toUserId as String?,
+      toAudience: toAudience == _sentinel
+          ? this.toAudience
+          : toAudience as String?,
+      recipient: recipient == _sentinel
+          ? this.recipient
+          : recipient as Recipient?,
+      repliesToMessageId: repliesToMessageId == _sentinel
+          ? this.repliesToMessageId
+          : repliesToMessageId as String?,
+      replyToPreview: replyToPreview == _sentinel
+          ? this.replyToPreview
+          : replyToPreview as ReplyPreview?,
+      originalText: originalText == _sentinel
+          ? this.originalText
+          : originalText as String?,
+      extra: extra == _sentinel ? this.extra : extra as JsonMap?,
+      promptVersionId: promptVersionId == _sentinel
+          ? this.promptVersionId
+          : promptVersionId as String?,
+      createdAt: createdAt ?? this.createdAt,
+      resolvedAt: resolvedAt == _sentinel
+          ? this.resolvedAt
+          : resolvedAt as DateTime?,
+    );
+  }
+
   JsonMap toJson() => {
-        'id': id,
-        'thread_id': threadId,
-        'type': type,
-        'body': body,
-        'tone': tone,
-        'from_user_id': fromUserId,
-        'to_user_id': toUserId,
-        'to_audience': toAudience,
-        'recipient': recipient?.toJson(),
-        'replies_to_message_id': repliesToMessageId,
-        'reply_to_preview': replyToPreview?.toJson(),
-        'original_text': originalText,
-        'extra': extra,
-        'prompt_version_id': promptVersionId,
-        'created_at': _dateToJson(createdAt),
-        'resolved_at': _nullableDateToJson(resolvedAt),
-      };
+    'id': id,
+    'thread_id': threadId,
+    'type': type,
+    'body': body,
+    'tone': tone,
+    'from_user_id': fromUserId,
+    'to_user_id': toUserId,
+    'to_audience': toAudience,
+    'recipient': recipient?.toJson(),
+    'replies_to_message_id': repliesToMessageId,
+    'reply_to_preview': replyToPreview?.toJson(),
+    'original_text': originalText,
+    'extra': extra,
+    'prompt_version_id': promptVersionId,
+    'created_at': _dateToJson(createdAt),
+    'resolved_at': _nullableDateToJson(resolvedAt),
+  };
 }
 
 class SseMessage {
@@ -735,19 +769,19 @@ class SseMessage {
   final DateTime createdAt;
 
   JsonMap toJson() => {
-        'id': id,
-        'thread_id': threadId,
-        'type': type,
-        'body': body,
-        'tone': tone,
-        'from_user_id': fromUserId,
-        'to_user_id': toUserId,
-        'to_audience': toAudience,
-        'replies_to_message_id': repliesToMessageId,
-        'original_text': originalText,
-        'extra': extra,
-        'created_at': _dateToJson(createdAt),
-      };
+    'id': id,
+    'thread_id': threadId,
+    'type': type,
+    'body': body,
+    'tone': tone,
+    'from_user_id': fromUserId,
+    'to_user_id': toUserId,
+    'to_audience': toAudience,
+    'replies_to_message_id': repliesToMessageId,
+    'original_text': originalText,
+    'extra': extra,
+    'created_at': _dateToJson(createdAt),
+  };
 }
 
 class SearchResult {
@@ -780,20 +814,17 @@ class SearchResult {
   final double relevance;
 
   JsonMap toJson() => {
-        'id': id,
-        'body': body,
-        'type': type,
-        'created_at': _dateToJson(createdAt),
-        'from_user_id': fromUserId,
-        'relevance': relevance,
-      };
+    'id': id,
+    'body': body,
+    'type': type,
+    'created_at': _dateToJson(createdAt),
+    'from_user_id': fromUserId,
+    'relevance': relevance,
+  };
 }
 
 class SearchResponse {
-  const SearchResponse({
-    required this.results,
-    required this.count,
-  });
+  const SearchResponse({required this.results, required this.count});
 
   factory SearchResponse.fromJson(Object? json) {
     final data = _map(json);
@@ -807,9 +838,9 @@ class SearchResponse {
   final int count;
 
   JsonMap toJson() => {
-        'results': results.map((result) => result.toJson()).toList(),
-        'count': count,
-      };
+    'results': results.map((result) => result.toJson()).toList(),
+    'count': count,
+  };
 }
 
 class TenantMembership {
@@ -842,13 +873,13 @@ class TenantMembership {
   final User user;
 
   JsonMap toJson() => {
-        'id': id,
-        'tenant_id': tenantId,
-        'user_id': userId,
-        'role': role,
-        'created_at': _dateToJson(createdAt),
-        'user': user.toJson(),
-      };
+    'id': id,
+    'tenant_id': tenantId,
+    'user_id': userId,
+    'role': role,
+    'created_at': _dateToJson(createdAt),
+    'user': user.toJson(),
+  };
 }
 
 class MemberStatus {
@@ -890,16 +921,16 @@ class MemberStatus {
   final DateTime? lastActive;
 
   JsonMap toJson() => {
-        'user_id': userId,
-        'user': user.toJson(),
-        'role': role,
-        'checked_in': checkedIn,
-        'has_blocker': hasBlocker,
-        'relay_count': relayCount,
-        'blocker_count': blockerCount,
-        'relays_with_you': relaysWithYou,
-        'last_active': _nullableDateToJson(lastActive),
-      };
+    'user_id': userId,
+    'user': user.toJson(),
+    'role': role,
+    'checked_in': checkedIn,
+    'has_blocker': hasBlocker,
+    'relay_count': relayCount,
+    'blocker_count': blockerCount,
+    'relays_with_you': relaysWithYou,
+    'last_active': _nullableDateToJson(lastActive),
+  };
 }
 
 class ProjectGoals {
@@ -929,12 +960,12 @@ class ProjectGoals {
   final DateTime? changedAt;
 
   JsonMap toJson() => {
-        'project_id': projectId,
-        'revision': revision,
-        'goals': goals,
-        'changed_by': changedBy,
-        'changed_at': _nullableDateToJson(changedAt),
-      };
+    'project_id': projectId,
+    'revision': revision,
+    'goals': goals,
+    'changed_by': changedBy,
+    'changed_at': _nullableDateToJson(changedAt),
+  };
 }
 
 class ProjectGoalsHistoryItem {
@@ -961,11 +992,11 @@ class ProjectGoalsHistoryItem {
   final DateTime changedAt;
 
   JsonMap toJson() => {
-        'revision': revision,
-        'goals': goals,
-        'changed_by_name': changedByName,
-        'changed_at': _dateToJson(changedAt),
-      };
+    'revision': revision,
+    'goals': goals,
+    'changed_by_name': changedByName,
+    'changed_at': _dateToJson(changedAt),
+  };
 }
 
 class ProjectState {
@@ -995,12 +1026,12 @@ class ProjectState {
   final DateTime? changedAt;
 
   JsonMap toJson() => {
-        'project_id': projectId,
-        'revision': revision,
-        'body': body,
-        'changed_by': changedBy,
-        'changed_at': _nullableDateToJson(changedAt),
-      };
+    'project_id': projectId,
+    'revision': revision,
+    'body': body,
+    'changed_by': changedBy,
+    'changed_at': _nullableDateToJson(changedAt),
+  };
 }
 
 class ProjectStateHistoryItem {
@@ -1030,12 +1061,12 @@ class ProjectStateHistoryItem {
   final bool autoEvolved;
 
   JsonMap toJson() => {
-        'revision': revision,
-        'body': body,
-        'changed_by_name': changedByName,
-        'changed_at': _dateToJson(changedAt),
-        'auto_evolved': autoEvolved,
-      };
+    'revision': revision,
+    'body': body,
+    'changed_by_name': changedByName,
+    'changed_at': _dateToJson(changedAt),
+    'auto_evolved': autoEvolved,
+  };
 }
 
 class ProjectSheet {
@@ -1068,20 +1099,17 @@ class ProjectSheet {
   final DateTime createdAt;
 
   JsonMap toJson() => {
-        'id': id,
-        'google_sheet_id': googleSheetId,
-        'label': label,
-        'schema_hint': schemaHint,
-        'attached_by': attachedBy,
-        'created_at': _dateToJson(createdAt),
-      };
+    'id': id,
+    'google_sheet_id': googleSheetId,
+    'label': label,
+    'schema_hint': schemaHint,
+    'attached_by': attachedBy,
+    'created_at': _dateToJson(createdAt),
+  };
 }
 
 class GoogleSheetsStatus {
-  const GoogleSheetsStatus({
-    required this.connected,
-    required this.scopes,
-  });
+  const GoogleSheetsStatus({required this.connected, required this.scopes});
 
   factory GoogleSheetsStatus.fromJson(Object? json) {
     final data = _map(json);
@@ -1094,8 +1122,5 @@ class GoogleSheetsStatus {
   final bool connected;
   final List<String> scopes;
 
-  JsonMap toJson() => {
-        'connected': connected,
-        'scopes': scopes,
-      };
+  JsonMap toJson() => {'connected': connected, 'scopes': scopes};
 }
