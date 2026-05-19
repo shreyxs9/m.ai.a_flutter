@@ -31,6 +31,24 @@ class AuthService {
     return response?['url']?.toString() ?? '';
   }
 
+  Future<GoogleSheetsStatus?> googleSheetsStatus() {
+    return client.get(
+      '/auth/google-sheets/status',
+      parse: GoogleSheetsStatus.fromJson,
+    );
+  }
+
+  Future<String> connectGoogleSheetsUrl() async {
+    final response = await client.get<Map<String, dynamic>>(
+      '/auth/google-sheets/connect',
+    );
+    return response?['url']?.toString() ?? '';
+  }
+
+  Future<void> disconnectGoogleSheets() async {
+    await client.delete<void>('/auth/google-sheets/disconnect');
+  }
+
   Future<List<Map<String, dynamic>>> devLogin() async {
     final response = await client.get<List<dynamic>>('/auth/dev-login');
     return response
@@ -176,6 +194,105 @@ class ProjectService {
       '/projects/${Uri.encodeComponent(projectId)}',
       body: body,
       parse: Project.fromJson,
+    );
+  }
+
+  Future<ProjectMember?> addMember(String projectId, String userId) {
+    return client.post(
+      '/projects/${Uri.encodeComponent(projectId)}/members',
+      body: {'user_id': userId},
+      parse: ProjectMember.fromJson,
+    );
+  }
+
+  Future<ProjectMember?> updateMember(
+    String projectId,
+    String userId, {
+    String? role,
+    bool? checkinEnabled,
+  }) {
+    final body = <String, dynamic>{};
+    if (role != null) {
+      body['role'] = role;
+    }
+    if (checkinEnabled != null) {
+      body['checkin_enabled'] = checkinEnabled;
+    }
+    return client.patch(
+      '/projects/${Uri.encodeComponent(projectId)}/members/${Uri.encodeComponent(userId)}',
+      body: body,
+      parse: ProjectMember.fromJson,
+    );
+  }
+
+  Future<void> removeMember(String projectId, String userId) async {
+    await client.delete<void>(
+      '/projects/${Uri.encodeComponent(projectId)}/members/${Uri.encodeComponent(userId)}',
+    );
+  }
+
+  Future<ProjectGoals?> goals(String projectId) {
+    return client.get(
+      '/projects/${Uri.encodeComponent(projectId)}/goals',
+      parse: ProjectGoals.fromJson,
+    );
+  }
+
+  Future<List<ProjectGoalsHistoryItem>> goalsHistory(String projectId) async {
+    final response = await client.get<List<dynamic>>(
+      '/projects/${Uri.encodeComponent(projectId)}/goals/history',
+    );
+    return response
+            ?.map(ProjectGoalsHistoryItem.fromJson)
+            .toList(growable: false) ??
+        <ProjectGoalsHistoryItem>[];
+  }
+
+  Future<ProjectState?> state(String projectId) {
+    return client.get(
+      '/projects/${Uri.encodeComponent(projectId)}/state',
+      parse: ProjectState.fromJson,
+    );
+  }
+
+  Future<List<ProjectStateHistoryItem>> stateHistory(String projectId) async {
+    final response = await client.get<List<dynamic>>(
+      '/projects/${Uri.encodeComponent(projectId)}/state/history',
+    );
+    return response
+            ?.map(ProjectStateHistoryItem.fromJson)
+            .toList(growable: false) ??
+        <ProjectStateHistoryItem>[];
+  }
+
+  Future<List<ProjectSheet>> listSheets(String projectId) async {
+    final response = await client.get<List<dynamic>>(
+      '/projects/${Uri.encodeComponent(projectId)}/sheets',
+    );
+    return response?.map(ProjectSheet.fromJson).toList(growable: false) ??
+        <ProjectSheet>[];
+  }
+
+  Future<ProjectSheet?> attachSheet(
+    String projectId, {
+    required String googleSheetId,
+    required String label,
+    required String schemaHint,
+  }) {
+    return client.post(
+      '/projects/${Uri.encodeComponent(projectId)}/sheets',
+      body: {
+        'google_sheet_id': googleSheetId,
+        'label': label,
+        'schema_hint': schemaHint,
+      },
+      parse: ProjectSheet.fromJson,
+    );
+  }
+
+  Future<void> detachSheet(String projectId, String sheetId) async {
+    await client.delete<void>(
+      '/projects/${Uri.encodeComponent(projectId)}/sheets/${Uri.encodeComponent(sheetId)}',
     );
   }
 

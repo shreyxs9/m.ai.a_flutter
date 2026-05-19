@@ -11,6 +11,8 @@ import '../../core/network/api_exception.dart';
 import '../../core/theme/maia_theme_helpers.dart';
 import '../../models/models.dart';
 import '../projects/project_avatar_widget.dart';
+import '../projects/project_context_panel.dart';
+import '../projects/project_settings_sheet.dart';
 
 const _pageSize = 100;
 const _messageTypes = <String>{
@@ -382,6 +384,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     } catch (_) {}
   }
 
+  Future<void> _refreshProject() async {
+    final projectId = widget.projectId;
+    final project = await ref.read(projectServiceProvider).get(projectId);
+    final teamStatus = await ref
+        .read(projectServiceProvider)
+        .teamStatus(projectId);
+    if (!mounted || projectId != widget.projectId || project == null) {
+      return;
+    }
+    setState(() {
+      _project = project;
+      _teamStatus = teamStatus;
+    });
+  }
+
   Future<void> _loadMemberTimeline(String userId) async {
     final project = _project;
     if (project == null) {
@@ -604,10 +621,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         project: project,
                         rightPanelOpen: _rightPanelOpen,
                         showPanelToggle: desktop,
+                        isAdmin: isAdmin,
                         onBack: () => context.go('/'),
                         onTogglePanel: () {
                           setState(() => _rightPanelOpen = !_rightPanelOpen);
                         },
+                        onSettings: () =>
+                            _showProjectSettings(project, isAdmin),
                       ),
                       Expanded(
                         child: _activeMemberId == null
@@ -787,6 +807,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       },
     );
   }
+
+  Future<void> _showProjectSettings(
+    ProjectWithMembers project,
+    bool isAdmin,
+  ) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => ProjectSettingsSheet(
+        project: project,
+        isCurrentUserAdmin: isAdmin,
+        onUpdated: _refreshProject,
+      ),
+    );
+  }
 }
 
 class _ProjectHeader extends StatelessWidget {
@@ -794,15 +831,19 @@ class _ProjectHeader extends StatelessWidget {
     required this.project,
     required this.rightPanelOpen,
     required this.showPanelToggle,
+    required this.isAdmin,
     required this.onBack,
     required this.onTogglePanel,
+    required this.onSettings,
   });
 
   final ProjectWithMembers project;
   final bool rightPanelOpen;
   final bool showPanelToggle;
+  final bool isAdmin;
   final VoidCallback onBack;
   final VoidCallback onTogglePanel;
+  final VoidCallback onSettings;
 
   @override
   Widget build(BuildContext context) {
@@ -859,6 +900,12 @@ class _ProjectHeader extends StatelessWidget {
                     ? Icons.view_sidebar_rounded
                     : Icons.view_sidebar_outlined,
               ),
+            ),
+          if (isAdmin)
+            IconButton(
+              tooltip: 'Project settings',
+              onPressed: onSettings,
+              icon: const Icon(Icons.settings_outlined),
             ),
         ],
       ),
@@ -1446,6 +1493,7 @@ class _RightPanel extends StatelessWidget {
             ),
           ),
           Divider(height: 1, color: tokens.border),
+          ProjectContextPanel(projectId: project.id, isAdmin: isAdmin),
           Padding(
             padding: const EdgeInsets.fromLTRB(18, 16, 18, 8),
             child: Text(
