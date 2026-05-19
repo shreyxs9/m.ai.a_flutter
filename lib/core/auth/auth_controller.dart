@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/models.dart';
 import '../network/network.dart';
 import 'browser_url.dart';
+import 'timezone_detector.dart';
 
 @immutable
 class AuthState {
@@ -65,6 +66,14 @@ final tenantServiceProvider = Provider<TenantService>((ref) {
 
 final projectServiceProvider = Provider<ProjectService>((ref) {
   return ProjectService(ref.watch(apiClientProvider));
+});
+
+final threadServiceProvider = Provider<ThreadService>((ref) {
+  return ThreadService(ref.watch(apiClientProvider));
+});
+
+final messageServiceProvider = Provider<MessageService>((ref) {
+  return MessageService(ref.watch(apiClientProvider));
 });
 
 final userServiceProvider = Provider<UserService>((ref) {
@@ -248,7 +257,7 @@ class AuthController extends AsyncNotifier<AuthState> {
 
   Future<void> _syncTimezone() async {
     try {
-      await _authService.updateTimezone(DateTime.now().timeZoneName);
+      await _authService.updateTimezone(detectTimezone());
     } catch (_) {
       // Timezone sync is non-critical and should not invalidate the session.
     }

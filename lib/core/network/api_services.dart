@@ -117,10 +117,10 @@ class ProjectService {
     return client.post('/projects/', body: body, parse: Project.fromJson);
   }
 
-  Future<Project?> get(String projectId) {
+  Future<ProjectWithMembers?> get(String projectId) {
     return client.get(
       '/projects/${Uri.encodeComponent(projectId)}',
-      parse: Project.fromJson,
+      parse: ProjectWithMembers.fromJson,
     );
   }
 
@@ -190,12 +190,41 @@ class ThreadService {
   const ThreadService(this.client);
 
   final ApiClient client;
+
+  Future<Thread?> getOrCreateForProject(String projectId) {
+    return client.get(
+      '/threads/project/${Uri.encodeComponent(projectId)}',
+      parse: Thread.fromJson,
+    );
+  }
+
+  Future<List<Message>> listMessages(
+    String threadId, {
+    int limit = 100,
+    int offset = 0,
+  }) async {
+    final response = await client.get<List<dynamic>>(
+      '/threads/${Uri.encodeComponent(threadId)}/messages',
+      queryParameters: <String, dynamic>{'limit': limit, 'offset': offset},
+    );
+    return response?.map(Message.fromJson).toList(growable: false) ??
+        <Message>[];
+  }
 }
 
 class MessageService {
   const MessageService(this.client);
 
   final ApiClient client;
+
+  Future<List<Message>> sendToThread(String threadId, String body) async {
+    final response = await client.post<List<dynamic>>(
+      '/messages/thread/${Uri.encodeComponent(threadId)}',
+      body: <String, dynamic>{'body': body},
+    );
+    return response?.map(Message.fromJson).toList(growable: false) ??
+        <Message>[];
+  }
 }
 
 class UserService {
