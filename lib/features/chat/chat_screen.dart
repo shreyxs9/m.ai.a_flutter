@@ -10,6 +10,7 @@ import 'package:intl/intl.dart';
 import '../../core/auth/auth_controller.dart';
 import '../../core/network/network.dart';
 import '../../core/theme/maia_theme_helpers.dart';
+import '../../core/theme/maia_theme_tokens.dart';
 import '../../models/models.dart';
 import '../projects/project_avatar_widget.dart';
 import '../projects/project_context_panel.dart';
@@ -1666,128 +1667,150 @@ class _Composer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = context.maia;
-    return Container(
-      decoration: BoxDecoration(
-        color: tokens.backgroundRaised,
-        border: Border(top: BorderSide(color: tokens.border)),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (mentionOpen && mentionCandidates.isNotEmpty)
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Container(
-                margin: const EdgeInsets.fromLTRB(14, 10, 14, 0),
-                constraints: const BoxConstraints(maxWidth: 360),
-                decoration: BoxDecoration(
-                  color: tokens.backgroundCard,
-                  border: Border.all(color: tokens.border),
-                  borderRadius: BorderRadius.circular(12),
+    final media = MediaQuery.of(context);
+    final compact = media.size.width < 760;
+    final composerRadius = BorderRadius.circular(
+      tokens.themeKey == MaiaThemeKey.brutalist ? 0 : 18,
+    );
+    return AnimatedPadding(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+      padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
+      child: SafeArea(
+        top: false,
+        minimum: const EdgeInsets.only(bottom: 8),
+        child: Container(
+          decoration: BoxDecoration(
+            color: tokens.backgroundRaised,
+            border: Border(top: BorderSide(color: tokens.border)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (mentionOpen && mentionCandidates.isNotEmpty)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Container(
+                    margin: const EdgeInsets.fromLTRB(14, 10, 14, 0),
+                    constraints: const BoxConstraints(maxWidth: 360),
+                    decoration: tokens.surfaceDecoration(withShadow: true),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        for (final entry in mentionCandidates.indexed)
+                          ListTile(
+                            dense: true,
+                            visualDensity: VisualDensity.compact,
+                            selected: entry.$1 == mentionIndex,
+                            selectedTileColor: tokens.accentSoft,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(
+                                tokens.radius.clamp(0, 10),
+                              ),
+                            ),
+                            leading: AvatarWidget(
+                              name: entry.$2.user?.name ?? 'Member',
+                              avatarUrl: entry.$2.user?.avatarUrl,
+                              size: 26,
+                            ),
+                            title: Text(
+                              entry.$2.user?.name ?? 'Member',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            subtitle: entry.$2.user?.title.isEmpty ?? true
+                                ? null
+                                : Text(entry.$2.user!.title),
+                            onTap: () => onPickMention(entry.$2),
+                          ),
+                      ],
+                    ),
+                  ),
                 ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
+              Padding(
+                padding: EdgeInsets.fromLTRB(14, 10, 14, compact ? 8 : 10),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    for (final entry in mentionCandidates.indexed)
-                      ListTile(
-                        dense: true,
-                        visualDensity: VisualDensity.compact,
-                        selected: entry.$1 == mentionIndex,
-                        leading: AvatarWidget(
-                          name: entry.$2.user?.name ?? 'Member',
-                          avatarUrl: entry.$2.user?.avatarUrl,
-                          size: 26,
-                        ),
-                        title: Text(
-                          entry.$2.user?.name ?? 'Member',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        subtitle: entry.$2.user?.title.isEmpty ?? true
-                            ? null
-                            : Text(entry.$2.user!.title),
-                        onTap: () => onPickMention(entry.$2),
+                    IconButton.filledTonal(
+                      tooltip: broadcastMode
+                          ? 'Disable broadcast'
+                          : 'Broadcast to everyone',
+                      onPressed: sending ? null : onToggleBroadcast,
+                      style: IconButton.styleFrom(
+                        backgroundColor: broadcastMode
+                            ? tokens.accent
+                            : tokens.backgroundCard,
+                        foregroundColor: broadcastMode
+                            ? tokens.accentInk
+                            : tokens.accent,
                       ),
+                      icon: const Icon(Icons.campaign_rounded),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextField(
+                        controller: controller,
+                        focusNode: focusNode,
+                        minLines: 1,
+                        maxLines: 6,
+                        textInputAction: TextInputAction.newline,
+                        style: TextStyle(
+                          color: tokens.text,
+                          fontSize: compact ? 16 : null,
+                        ),
+                        decoration: InputDecoration(
+                          hintText: broadcastMode
+                              ? 'Broadcast to everyone'
+                              : 'Message Maia',
+                          hintStyle: TextStyle(color: tokens.faint),
+                          filled: true,
+                          fillColor: tokens.backgroundCard,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 12,
+                          ),
+                          border: OutlineInputBorder(
+                            borderRadius: composerRadius,
+                            borderSide: BorderSide(color: tokens.border),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: composerRadius,
+                            borderSide: BorderSide(
+                              color: broadcastMode
+                                  ? tokens.accent
+                                  : tokens.border,
+                            ),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: composerRadius,
+                            borderSide: BorderSide(color: tokens.accent),
+                          ),
+                          hoverColor: tokens.accentSoft,
+                        ),
+                        onChanged: onChanged,
+                        onSubmitted: (_) => onSend(),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    FilledButton(
+                      onPressed: sending ? null : onSend,
+                      style: FilledButton.styleFrom(
+                        shape: const CircleBorder(),
+                        padding: const EdgeInsets.all(14),
+                        backgroundColor: tokens.accent,
+                        foregroundColor: tokens.accentInk,
+                      ),
+                      child: sending
+                          ? const SpinnerWidget(size: 18)
+                          : const Icon(Icons.arrow_upward_rounded),
+                    ),
                   ],
                 ),
               ),
-            ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                IconButton.filledTonal(
-                  tooltip: broadcastMode
-                      ? 'Disable broadcast'
-                      : 'Broadcast to everyone',
-                  onPressed: sending ? null : onToggleBroadcast,
-                  style: IconButton.styleFrom(
-                    backgroundColor: broadcastMode
-                        ? tokens.accent
-                        : tokens.backgroundCard,
-                    foregroundColor: broadcastMode
-                        ? tokens.accentInk
-                        : tokens.accent,
-                  ),
-                  icon: const Icon(Icons.campaign_rounded),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: TextField(
-                    controller: controller,
-                    focusNode: focusNode,
-                    minLines: 1,
-                    maxLines: 6,
-                    textInputAction: TextInputAction.newline,
-                    style: TextStyle(color: tokens.text),
-                    decoration: InputDecoration(
-                      hintText: broadcastMode
-                          ? 'Broadcast to everyone'
-                          : 'Message Maia',
-                      hintStyle: TextStyle(color: tokens.faint),
-                      filled: true,
-                      fillColor: tokens.backgroundCard,
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 12,
-                      ),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(18),
-                        borderSide: BorderSide(color: tokens.border),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(18),
-                        borderSide: BorderSide(
-                          color: broadcastMode ? tokens.accent : tokens.border,
-                        ),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(18),
-                        borderSide: BorderSide(color: tokens.accent),
-                      ),
-                    ),
-                    onChanged: onChanged,
-                    onSubmitted: (_) => onSend(),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                FilledButton(
-                  onPressed: sending ? null : onSend,
-                  style: FilledButton.styleFrom(
-                    shape: const CircleBorder(),
-                    padding: const EdgeInsets.all(14),
-                    backgroundColor: tokens.accent,
-                    foregroundColor: tokens.accentInk,
-                  ),
-                  child: sending
-                      ? const SpinnerWidget(size: 18)
-                      : const Icon(Icons.arrow_upward_rounded),
-                ),
-              ],
-            ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }

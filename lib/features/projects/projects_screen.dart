@@ -1055,6 +1055,7 @@ class _ProjectCard extends StatelessWidget {
           decoration: tokens
               .surfaceDecoration(
                 borderRadius: BorderRadius.circular(tokens.radius),
+                withShadow: true,
               )
               .copyWith(
                 border: Border.all(
@@ -1522,47 +1523,51 @@ class _WorkspaceEmptyProjects extends StatelessWidget {
         padding: const EdgeInsets.all(24),
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 420),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                width: 54,
-                height: 54,
-                decoration: tokens.accentSurfaceDecoration(),
-                child: Icon(Icons.grid_view_rounded, color: tokens.accent),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'No projects yet.',
-                style: Theme.of(context).textTheme.headlineSmall,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Start a project, or join one with an invite code.',
-                textAlign: TextAlign.center,
-                style: Theme.of(
-                  context,
-                ).textTheme.bodyMedium?.copyWith(color: tokens.dim),
-              ),
-              const SizedBox(height: 20),
-              Wrap(
-                alignment: WrapAlignment.center,
-                spacing: 10,
-                runSpacing: 10,
-                children: [
-                  OutlinedButton.icon(
-                    onPressed: onJoin,
-                    icon: const Icon(Icons.link_rounded),
-                    label: const Text('Join'),
-                  ),
-                  FilledButton.icon(
-                    onPressed: onCreate,
-                    icon: const Icon(Icons.add_rounded),
-                    label: const Text('New project'),
-                  ),
-                ],
-              ),
-            ],
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(24, 26, 24, 24),
+            decoration: tokens.surfaceDecoration(withShadow: true),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 54,
+                  height: 54,
+                  decoration: tokens.accentSurfaceDecoration(),
+                  child: Icon(Icons.grid_view_rounded, color: tokens.accent),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'No projects yet.',
+                  style: Theme.of(context).textTheme.headlineSmall,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Start a project, or join one with an invite code.',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(color: tokens.dim),
+                ),
+                const SizedBox(height: 20),
+                Wrap(
+                  alignment: WrapAlignment.center,
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: onJoin,
+                      icon: const Icon(Icons.link_rounded),
+                      label: const Text('Join'),
+                    ),
+                    FilledButton.icon(
+                      onPressed: onCreate,
+                      icon: const Icon(Icons.add_rounded),
+                      label: const Text('New project'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -1582,19 +1587,26 @@ class _ErrorState extends StatelessWidget {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.error_outline_rounded, color: tokens.danger),
-            const SizedBox(height: 10),
-            Text(
-              message,
-              textAlign: TextAlign.center,
-              style: TextStyle(color: tokens.danger),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(24, 24, 24, 22),
+            decoration: tokens.dangerSurfaceDecoration(),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.error_outline_rounded, color: tokens.danger),
+                const SizedBox(height: 10),
+                Text(
+                  message,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: tokens.danger),
+                ),
+                const SizedBox(height: 12),
+                OutlinedButton(onPressed: onRetry, child: const Text('Retry')),
+              ],
             ),
-            const SizedBox(height: 12),
-            OutlinedButton(onPressed: onRetry, child: const Text('Retry')),
-          ],
+          ),
         ),
       ),
     );

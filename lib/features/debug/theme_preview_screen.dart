@@ -10,7 +10,9 @@ class ThemePreviewScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final selection = ref.watch(themeControllerProvider).maybeWhen(
+    final selection = ref
+        .watch(themeControllerProvider)
+        .maybeWhen(
           data: (value) => value,
           orElse: () => const MaiaThemeSelection(),
         );
@@ -37,17 +39,31 @@ class ThemePreviewScreen extends ConsumerWidget {
         child: ListView(
           padding: const EdgeInsets.all(24),
           children: [
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final theme in MaiaThemeKey.values)
-                  ChoiceChip(
-                    label: Text(theme.label),
-                    selected: selection.theme == theme,
-                    onSelected: (_) => controller.setTheme(theme),
-                  ),
-              ],
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final columns = constraints.maxWidth >= 900
+                    ? 4
+                    : constraints.maxWidth >= 620
+                    ? 2
+                    : 1;
+                return GridView.count(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  crossAxisCount: columns,
+                  mainAxisSpacing: 12,
+                  crossAxisSpacing: 12,
+                  childAspectRatio: columns == 1 ? 3.4 : 1.65,
+                  children: [
+                    for (final theme in MaiaThemeKey.values)
+                      _ThemePreviewCard(
+                        theme: theme,
+                        mode: selection.mode,
+                        selected: selection.theme == theme,
+                        onTap: () => controller.setTheme(theme),
+                      ),
+                  ],
+                );
+              },
             ),
             const SizedBox(height: 12),
             SegmentedButton<MaiaThemeMode>(
@@ -135,11 +151,120 @@ class ThemePreviewScreen extends ConsumerWidget {
   }
 }
 
-class _SamplePanel extends StatelessWidget {
-  const _SamplePanel({
-    required this.label,
-    required this.decoration,
+class _ThemePreviewCard extends StatelessWidget {
+  const _ThemePreviewCard({
+    required this.theme,
+    required this.mode,
+    required this.selected,
+    required this.onTap,
   });
+
+  final MaiaThemeKey theme;
+  final MaiaThemeMode mode;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.maia;
+    final preview = MaiaThemeTokens.resolve(theme, mode);
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(tokens.radius),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: tokens
+            .surfaceDecoration(withShadow: selected)
+            .copyWith(
+              color: selected ? tokens.accentSoft : tokens.backgroundCard,
+              border: Border.all(
+                color: selected ? tokens.accent : tokens.border,
+                width: selected ? 1.5 : 1,
+              ),
+            ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: preview.background,
+                  borderRadius: BorderRadius.circular(preview.radius),
+                  border: Border.all(color: preview.border),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        CircleAvatar(
+                          radius: 4,
+                          backgroundColor: preview.accent,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Container(
+                            height: 5,
+                            decoration: BoxDecoration(
+                              color: preview.faint,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const Spacer(),
+                    Text(
+                      'Aa',
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        color: preview.text,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    theme.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                if (selected)
+                  Icon(
+                    Icons.check_circle_rounded,
+                    size: 18,
+                    color: tokens.accent,
+                  ),
+              ],
+            ),
+            Text(
+              theme.blurb,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: tokens.dim),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SamplePanel extends StatelessWidget {
+  const _SamplePanel({required this.label, required this.decoration});
 
   final String label;
   final BoxDecoration decoration;
@@ -156,10 +281,7 @@ class _SamplePanel extends StatelessWidget {
 }
 
 class _Swatch extends StatelessWidget {
-  const _Swatch({
-    required this.label,
-    required this.color,
-  });
+  const _Swatch({required this.label, required this.color});
 
   final String label;
   final Color color;

@@ -760,126 +760,141 @@ class _ThemeCard extends StatelessWidget {
     final tokens = context.maia;
     final preview = MaiaThemeTokens.resolve(theme, mode);
 
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(tokens.radius),
-      child: Container(
-        decoration: tokens.surfaceDecoration().copyWith(
-          color: selected ? tokens.accentSoft : tokens.backgroundCard,
-          border: Border.all(
-            color: selected ? tokens.accent : tokens.border,
-            width: selected ? 1.5 : 1,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 460;
+        final previewPanel = Container(
+          width: compact ? double.infinity : 170,
+          height: compact ? 96 : 110,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: preview.background,
+            borderRadius: compact
+                ? BorderRadius.vertical(top: Radius.circular(tokens.radius))
+                : BorderRadius.horizontal(left: Radius.circular(tokens.radius)),
+            border: compact
+                ? Border(bottom: BorderSide(color: preview.border))
+                : Border(right: BorderSide(color: preview.border)),
           ),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 170,
-              height: 110,
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: preview.background,
-                borderRadius: BorderRadius.horizontal(
-                  left: Radius.circular(tokens.radius),
-                ),
-                border: Border(right: BorderSide(color: preview.border)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
                 children: [
-                  Row(
-                    children: [
-                      CircleAvatar(radius: 4, backgroundColor: preview.accent),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Container(
-                          height: 5,
-                          decoration: BoxDecoration(
-                            color: preview.text.withValues(alpha: 0.42),
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                        ),
+                  CircleAvatar(radius: 4, backgroundColor: preview.accent),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Container(
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: preview.text.withValues(alpha: 0.42),
+                        borderRadius: BorderRadius.circular(999),
                       ),
-                    ],
-                  ),
-                  const Spacer(),
-                  Text(
-                    'Aa',
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      color: preview.text,
-                      fontFamily: _previewFontFamily(context, preview),
-                    ),
-                  ),
-                  const SizedBox(height: 5),
-                  Container(
-                    width: 72,
-                    height: 5,
-                    decoration: BoxDecoration(
-                      color: preview.dim.withValues(alpha: 0.7),
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                  ),
-                  const SizedBox(height: 5),
-                  Container(
-                    width: 48,
-                    height: 5,
-                    decoration: BoxDecoration(
-                      color: preview.faint,
-                      borderRadius: BorderRadius.circular(999),
                     ),
                   ),
                 ],
               ),
-            ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Flexible(
-                          child: Text(
-                            theme.label,
-                            style: Theme.of(context).textTheme.titleMedium
-                                ?.copyWith(fontWeight: FontWeight.w700),
-                          ),
-                        ),
-                        if (selected) ...[
-                          const SizedBox(width: 8),
-                          Text(
-                            'CURRENT',
-                            style: _eyebrowStyle(
-                              context,
-                            ).copyWith(color: tokens.accent),
-                          ),
-                        ],
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      theme.blurb,
-                      style: Theme.of(
-                        context,
-                      ).textTheme.bodySmall?.copyWith(color: tokens.dim),
-                    ),
-                    const SizedBox(height: 12),
-                    Wrap(
-                      spacing: 8,
-                      children: [
-                        _ColorDot(color: preview.accent, label: 'accent'),
-                        _ColorDot(color: preview.success, label: 'success'),
-                        _ColorDot(color: preview.danger, label: 'danger'),
-                      ],
-                    ),
-                  ],
+              const Spacer(),
+              Text(
+                'Aa',
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                  color: preview.text,
+                  fontFamily: _previewFontFamily(context, preview),
                 ),
               ),
-            ),
-          ],
-        ),
-      ),
+              const SizedBox(height: 5),
+              Container(
+                width: 72,
+                height: 5,
+                decoration: BoxDecoration(
+                  color: preview.dim.withValues(alpha: 0.7),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+              ),
+              const SizedBox(height: 5),
+              Container(
+                width: 48,
+                height: 5,
+                decoration: BoxDecoration(
+                  color: preview.faint,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+              ),
+            ],
+          ),
+        );
+        final labelPanel = Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Flexible(
+                    child: Text(
+                      theme.label,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  if (selected) ...[
+                    const SizedBox(width: 8),
+                    Text(
+                      'CURRENT',
+                      style: _eyebrowStyle(
+                        context,
+                      ).copyWith(color: tokens.accent),
+                    ),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                theme.blurb,
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: tokens.dim),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                children: [
+                  _ColorDot(color: preview.accent, label: 'accent'),
+                  _ColorDot(color: preview.success, label: 'success'),
+                  _ColorDot(color: preview.danger, label: 'danger'),
+                ],
+              ),
+            ],
+          ),
+        );
+        return InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(tokens.radius),
+          child: Container(
+            decoration: tokens
+                .surfaceDecoration(withShadow: selected)
+                .copyWith(
+                  color: selected ? tokens.accentSoft : tokens.backgroundCard,
+                  border: Border.all(
+                    color: selected ? tokens.accent : tokens.border,
+                    width: selected ? 1.5 : 1,
+                  ),
+                ),
+            child: compact
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [previewPanel, labelPanel],
+                  )
+                : Row(
+                    children: [
+                      previewPanel,
+                      Expanded(child: labelPanel),
+                    ],
+                  ),
+          ),
+        );
+      },
     );
   }
 }
