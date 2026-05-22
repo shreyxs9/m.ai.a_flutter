@@ -32,7 +32,7 @@
   <link rel="alternate icon" type="image/png" href="favicon.png">
 
   <title>M.AI.A</title>
-  <link rel="manifest" href="manifest.json">
+  <link rel="manifest" href="manifest.webmanifest">
 </head>
 <body>
   <script>
@@ -49,6 +49,8 @@
         "https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js",
         "https://www.gstatic.com/firebasejs/10.13.2/firebase-messaging-compat.js",
       ];
+      const messagingWorkerUrl = "/firebase-messaging-sw.js";
+      const messagingWorkerScope = "/firebase-cloud-messaging-push-scope";
       let firebaseLoadPromise = null;
       let app = null;
       let messaging = null;
@@ -187,7 +189,7 @@
             return { status: "permission-denied" };
           }
 
-          let registration = await navigator.serviceWorker.getRegistration("/firebase-messaging-sw.js");
+          let registration = await navigator.serviceWorker.getRegistration(messagingWorkerScope);
           const existingSub = await registration?.pushManager.getSubscription();
           if (existingSub && registration) {
             const messaging = await initMessaging(config);
@@ -209,7 +211,9 @@
 
           const messaging = await initMessaging(config);
           registration = await activeRegistration(
-            await navigator.serviceWorker.register("/firebase-messaging-sw.js")
+            await navigator.serviceWorker.register(messagingWorkerUrl, {
+              scope: messagingWorkerScope,
+            })
           );
           registration.active?.postMessage({ type: "MAIA_FIREBASE_CONFIG", config });
           const token = await messaging.getToken({

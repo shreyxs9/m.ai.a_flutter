@@ -1,7 +1,7 @@
 # M.AI.A Flutter Web PWA and Push Notes
 
-PWA assets are copied from the React frontend and wired through `web/index.html`
-and `web/manifest.json`.
+PWA assets are copied from the React frontend and wired through `web/index.html`,
+`web/manifest.webmanifest`, and the compatibility `web/manifest.json`.
 
 Push uses Firebase Cloud Messaging through a small browser JavaScript bridge.
 Firebase public config is not hardcoded in the app or service worker. Pass it at
@@ -24,6 +24,9 @@ Limitations:
 
 - Browser push only works on web targets with Notification, Service Worker, and
   PushManager support.
+- The Firebase Messaging worker uses its own
+  `/firebase-cloud-messaging-push-scope` scope so it does not replace Flutter's
+  generated app service worker.
 - iOS Safari can receive web push only after the site is installed to the home
   screen as a PWA.
 - If Firebase config or the VAPID key is missing, the banner is suppressed as
