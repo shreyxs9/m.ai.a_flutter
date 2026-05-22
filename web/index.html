@@ -38,9 +38,12 @@
 <body>
   <script>
     try {
+      const detectedTimezone =
+        Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+      window.localStorage.setItem('maia_timezone', detectedTimezone);
       window.localStorage.setItem(
         'maia_detected_timezone',
-        Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+        detectedTimezone
       );
     } catch (_) {}
   </script>
