@@ -18,18 +18,20 @@
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
+  <meta name="description" content="Daily team check-ins, mediated by Maia.">
+  <meta name="theme-color" content="#15110c">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="maia_flutter">
-  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+  <meta name="apple-mobile-web-app-title" content="M.AI.A">
+  <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon-180.png">
 
   <!-- Favicon -->
-  <link rel="icon" type="image/png" href="favicon.png"/>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="alternate icon" type="image/png" href="favicon.png">
 
-  <title>maia_flutter</title>
+  <title>M.AI.A</title>
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
@@ -40,6 +42,184 @@
         Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
       );
     } catch (_) {}
+  </script>
+  <script>
+    (function () {
+      const firebaseScripts = [
+        "https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js",
+        "https://www.gstatic.com/firebasejs/10.13.2/firebase-messaging-compat.js",
+      ];
+      let firebaseLoadPromise = null;
+      let app = null;
+      let messaging = null;
+
+      function loadScript(src) {
+        return new Promise((resolve, reject) => {
+          const existing = document.querySelector(`script[src="${src}"]`);
+          if (existing) {
+            existing.addEventListener("load", resolve, { once: true });
+            existing.addEventListener("error", reject, { once: true });
+            if (window.firebase) resolve();
+            return;
+          }
+          const script = document.createElement("script");
+          script.src = src;
+          script.async = true;
+          script.onload = resolve;
+          script.onerror = reject;
+          document.head.appendChild(script);
+        });
+      }
+
+      function hasConfig(config) {
+        return Boolean(
+          config &&
+            config.apiKey &&
+            config.projectId &&
+            config.messagingSenderId &&
+            config.appId &&
+            config.vapidKey
+        );
+      }
+
+      function isInstalledPwa() {
+        return (
+          window.matchMedia?.("(display-mode: standalone)")?.matches ||
+          window.navigator.standalone === true
+        );
+      }
+
+      function isIosSafari() {
+        const ua = navigator.userAgent;
+        return /iPhone|iPad|iPod/.test(ua) && /Safari/.test(ua) && !/CriOS|FxiOS/.test(ua);
+      }
+
+      async function loadFirebase() {
+        if (!firebaseLoadPromise) {
+          firebaseLoadPromise = firebaseScripts.reduce(
+            (promise, src) => promise.then(() => loadScript(src)),
+            Promise.resolve()
+          );
+        }
+        await firebaseLoadPromise;
+        if (!window.firebase) throw new Error("Firebase SDK did not load");
+      }
+
+      async function activeRegistration(registration) {
+        if (registration.active) return registration;
+        const worker = registration.installing || registration.waiting;
+        if (!worker) return registration;
+        await new Promise((resolve, reject) => {
+          const timeout = window.setTimeout(() => {
+            worker.removeEventListener("statechange", onStateChange);
+            reject(new Error("Timed out waiting for service worker activation"));
+          }, 10000);
+          function onStateChange() {
+            if (worker.state === "activated") {
+              window.clearTimeout(timeout);
+              worker.removeEventListener("statechange", onStateChange);
+              resolve();
+            } else if (worker.state === "redundant") {
+              window.clearTimeout(timeout);
+              worker.removeEventListener("statechange", onStateChange);
+              reject(new Error("Service worker became redundant before activation"));
+            }
+          }
+          worker.addEventListener("statechange", onStateChange);
+          onStateChange();
+        });
+        return registration;
+      }
+
+      async function initMessaging(config) {
+        await loadFirebase();
+        if (!app) {
+          app = window.firebase.initializeApp({
+            apiKey: config.apiKey,
+            authDomain: config.authDomain,
+            projectId: config.projectId,
+            messagingSenderId: config.messagingSenderId,
+            appId: config.appId,
+          });
+        }
+        if (!messaging) {
+          messaging = window.firebase.messaging(app);
+          messaging.onMessage((payload) => {
+            if (Notification.permission !== "granted") return;
+            const data = payload.data || {};
+            try {
+              const notification = new Notification(data.title || "M.AI.A", {
+                body: data.body || "",
+                icon: "/icon-192.png",
+                tag: data.tag || "maia-fg",
+              });
+              notification.onclick = () => {
+                window.focus();
+                if (data.url && data.url !== window.location.pathname) {
+                  window.location.assign(data.url);
+                }
+                notification.close();
+              };
+            } catch (_) {}
+          });
+        }
+        return messaging;
+      }
+
+      window.maiaPush = {
+        ensureSubscriptionCallback(config, promptIfDefault, callback) {
+          this.ensureSubscription(config, promptIfDefault)
+            .then((result) => callback(result))
+            .catch(() => callback({ status: "error" }));
+        },
+        async ensureSubscription(config, promptIfDefault) {
+          if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+            return { status: "unsupported" };
+          }
+          if (isIosSafari() && !isInstalledPwa()) {
+            return { status: "needs-install" };
+          }
+          if (!hasConfig(config)) {
+            console.warn("[push] Firebase dart-defines missing; skipping FCM init");
+            return { status: "unsupported" };
+          }
+          if (Notification.permission === "denied") {
+            return { status: "permission-denied" };
+          }
+
+          let registration = await navigator.serviceWorker.getRegistration("/firebase-messaging-sw.js");
+          const existingSub = await registration?.pushManager.getSubscription();
+          if (existingSub && registration) {
+            const messaging = await initMessaging(config);
+            registration.active?.postMessage({ type: "MAIA_FIREBASE_CONFIG", config });
+            const token = await messaging.getToken({
+              vapidKey: config.vapidKey,
+              serviceWorkerRegistration: registration,
+            });
+            return token ? { status: "subscribed", token } : { status: "error" };
+          }
+
+          if (Notification.permission === "default") {
+            if (!promptIfDefault) return { status: "permission-default" };
+            const next = await Notification.requestPermission();
+            if (next !== "granted") {
+              return { status: next === "denied" ? "permission-denied" : "permission-default" };
+            }
+          }
+
+          const messaging = await initMessaging(config);
+          registration = await activeRegistration(
+            await navigator.serviceWorker.register("/firebase-messaging-sw.js")
+          );
+          registration.active?.postMessage({ type: "MAIA_FIREBASE_CONFIG", config });
+          const token = await messaging.getToken({
+            vapidKey: config.vapidKey,
+            serviceWorkerRegistration: registration,
+          });
+          return token ? { status: "subscribed", token } : { status: "error" };
+        },
+      };
+    })();
   </script>
   <!--
     You can customize the "flutter_bootstrap.js" script.

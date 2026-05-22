@@ -1,3 +1,9 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:math';
+
+import 'package:dio/dio.dart';
+
 import 'api_client.dart';
 import '../../models/models.dart';
 
@@ -493,12 +499,300 @@ class PushService {
   const PushService(this.client);
 
   final ApiClient client;
+
+  Future<void> registerToken(String token, String platform) async {
+    await client.post<void>(
+      '/me/push-tokens',
+      body: <String, dynamic>{'token': token, 'platform': platform},
+    );
+  }
+
+  Future<void> deleteToken(String token) async {
+    await client.delete<void>('/me/push-tokens/${Uri.encodeComponent(token)}');
+  }
 }
 
 class SseService {
   const SseService(this.client);
 
   final ApiClient client;
+
+  SseStreamController sendAndStream(
+    String threadId,
+    String body,
+    SseCallback onEvent, {
+    String? repliesToMessageId,
+    List<String> mentionUserIds = const <String>[],
+    void Function(String sessionId)? onSession,
+  }) {
+    final cancelToken = CancelToken();
+    String? sessionId;
+    var lastSeq = 0;
+
+    void trackingEvent(String event, SseJsonMap data) {
+      final rawSeq = data['seq'];
+      if (rawSeq is num && rawSeq > lastSeq) {
+        lastSeq = rawSeq.toInt();
+      }
+      if (event == 'session' && data['session_id'] is String) {
+        sessionId = data['session_id'] as String;
+        onSession?.call(sessionId!);
+      }
+      onEvent(event, data);
+    }
+
+    unawaited(() async {
+      try {
+        final payload = <String, dynamic>{'body': body};
+        if (repliesToMessageId != null && repliesToMessageId.isNotEmpty) {
+          payload['replies_to_message_id'] = repliesToMessageId;
+        }
+        if (mentionUserIds.isNotEmpty) {
+          payload['mention_user_ids'] = mentionUserIds;
+        }
+        final response = await _requestStream(
+          '/sse/send/${Uri.encodeComponent(threadId)}',
+          method: 'POST',
+          body: payload,
+          cancelToken: cancelToken,
+        );
+        final headerSession =
+            response.headers.value('X-Maia-Session-Id') ??
+            response.headers.value('x-maia-session-id');
+        if (headerSession != null && sessionId == null) {
+          sessionId = headerSession;
+          onSession?.call(headerSession);
+        }
+        await parseSseByteStream(response.data!.stream, trackingEvent);
+      } on DioException catch (error) {
+        if (error.type != DioExceptionType.cancel) {
+          onEvent('error', {'detail': _streamErrorMessage(error)});
+        }
+      } catch (error) {
+        onEvent('error', {'detail': error.toString()});
+      }
+    }());
+
+    return SseStreamController(
+      abort: cancelToken.cancel,
+      getSessionId: () => sessionId,
+      getLastSeq: () => lastSeq,
+    );
+  }
+
+  SseStreamController reconnectStream(
+    String sessionId,
+    int lastSeq,
+    SseCallback onEvent,
+  ) {
+    final cancelToken = CancelToken();
+    var observedSeq = lastSeq;
+
+    void trackingEvent(String event, SseJsonMap data) {
+      final rawSeq = data['seq'];
+      if (rawSeq is num && rawSeq > observedSeq) {
+        observedSeq = rawSeq.toInt();
+      }
+      onEvent(event, data);
+    }
+
+    unawaited(() async {
+      try {
+        final response = await _requestStream(
+          '/sse/stream/${Uri.encodeComponent(sessionId)}',
+          queryParameters: <String, dynamic>{'last_seq': lastSeq},
+          cancelToken: cancelToken,
+        );
+        await parseSseByteStream(response.data!.stream, trackingEvent);
+      } on DioException catch (error) {
+        if (error.type != DioExceptionType.cancel) {
+          onEvent('error', {'detail': _streamErrorMessage(error)});
+        }
+      } catch (error) {
+        onEvent('error', {'detail': error.toString()});
+      }
+    }());
+
+    return SseStreamController(
+      abort: cancelToken.cancel,
+      getSessionId: () => sessionId,
+      getLastSeq: () => observedSeq,
+    );
+  }
+
+  SseSubscriptionController subscribeThread(
+    String threadId,
+    SseCallback onEvent,
+  ) {
+    final controller = SseSubscriptionController();
+    var firstConnect = true;
+    final random = Random();
+
+    Future<void> connect() async {
+      if (controller.stopped) {
+        return;
+      }
+      final cancelToken = CancelToken();
+      controller.innerCancelToken = cancelToken;
+      final isRotation = !firstConnect;
+      firstConnect = false;
+      var rotated = false;
+
+      try {
+        final response = await _requestStream(
+          '/sse/subscribe/${Uri.encodeComponent(threadId)}',
+          cancelToken: cancelToken,
+        );
+        if (isRotation && !controller.stopped) {
+          onEvent('resubscribed', <String, dynamic>{});
+        }
+        await parseSseByteStream(response.data!.stream, (event, data) {
+          if (event == 'reconnect') {
+            rotated = true;
+            return;
+          }
+          onEvent(event, data);
+        });
+        if (rotated && !controller.stopped) {
+          final jitter = Duration(milliseconds: 100 + random.nextInt(400));
+          Timer(jitter, () => unawaited(connect()));
+        } else if (!controller.stopped) {
+          onEvent('disconnected', <String, dynamic>{});
+        }
+      } on DioException catch (error) {
+        if (error.type != DioExceptionType.cancel && !controller.stopped) {
+          onEvent('error', {'detail': _streamErrorMessage(error)});
+        }
+      } catch (error) {
+        if (!controller.stopped) {
+          onEvent('error', {'detail': error.toString()});
+        }
+      }
+    }
+
+    unawaited(connect());
+    return controller;
+  }
+
+  Future<Response<ResponseBody>> _requestStream(
+    String path, {
+    String method = 'GET',
+    Object? body,
+    Map<String, dynamic>? queryParameters,
+    required CancelToken cancelToken,
+  }) async {
+    final response = await client.dio.request<ResponseBody>(
+      path,
+      data: body,
+      queryParameters: queryParameters,
+      cancelToken: cancelToken,
+      options: Options(
+        method: method,
+        responseType: ResponseType.stream,
+        headers: const {Headers.acceptHeader: 'text/event-stream'},
+      ),
+    );
+    final status = response.statusCode;
+    if (status == null ||
+        status < 200 ||
+        status >= 300 ||
+        response.data == null) {
+      throw DioException(
+        requestOptions: response.requestOptions,
+        response: response,
+        type: DioExceptionType.badResponse,
+        message: 'HTTP ${status ?? 'unknown'}',
+      );
+    }
+    return response;
+  }
+
+  String _streamErrorMessage(DioException error) {
+    final status = error.response?.statusCode;
+    if (status != null) {
+      return 'HTTP $status';
+    }
+    return error.message ?? 'Connection failed';
+  }
+}
+
+typedef SseJsonMap = Map<String, dynamic>;
+typedef SseCallback = void Function(String event, SseJsonMap data);
+
+class SseFrame {
+  const SseFrame({required this.event, required this.data});
+
+  final String event;
+  final SseJsonMap data;
+}
+
+class SseLineParser {
+  String? _currentEvent;
+
+  SseFrame? parseLine(String line) {
+    final normalized = line.endsWith('\r')
+        ? line.substring(0, line.length - 1)
+        : line;
+    if (normalized.startsWith('event:')) {
+      _currentEvent = normalized.substring(6).trimLeft();
+      return null;
+    }
+    if (normalized.startsWith('data:') && _currentEvent != null) {
+      final event = _currentEvent!;
+      _currentEvent = null;
+      try {
+        final decoded = jsonDecode(normalized.substring(5).trimLeft());
+        if (decoded is Map<String, dynamic>) {
+          return SseFrame(event: event, data: decoded);
+        }
+        if (decoded is Map) {
+          return SseFrame(
+            event: event,
+            data: decoded.map((key, value) => MapEntry('$key', value)),
+          );
+        }
+      } catch (_) {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
+Future<void> parseSseByteStream(
+  Stream<List<int>> stream,
+  SseCallback onEvent,
+) async {
+  final parser = SseLineParser();
+  await for (final line
+      in stream.transform(utf8.decoder).transform(const LineSplitter())) {
+    final frame = parser.parseLine(line);
+    if (frame != null) {
+      onEvent(frame.event, frame.data);
+    }
+  }
+}
+
+class SseStreamController {
+  const SseStreamController({
+    required this.abort,
+    required this.getSessionId,
+    required this.getLastSeq,
+  });
+
+  final void Function([Object? reason]) abort;
+  final String? Function() getSessionId;
+  final int Function() getLastSeq;
+}
+
+class SseSubscriptionController {
+  bool stopped = false;
+  CancelToken? innerCancelToken;
+
+  void abort() {
+    stopped = true;
+    innerCancelToken?.cancel();
+  }
 }
 
 class GoogleSheetsService {

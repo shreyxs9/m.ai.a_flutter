@@ -6,16 +6,19 @@ import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
 import 'core/theme/maia_theme_tokens.dart';
 import 'core/theme/theme_controller.dart';
+import 'features/push/push_prompt_banner.dart';
 
 class MaiaApp extends ConsumerWidget {
   const MaiaApp({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final themeSelection = ref.watch(themeControllerProvider).maybeWhen(
+    final themeSelection = ref
+        .watch(themeControllerProvider)
+        .maybeWhen(
           data: (selection) => selection,
           orElse: () => const MaiaThemeSelection(),
-    );
+        );
     final router = ref.watch(appRouterProvider);
 
     return MaterialApp.router(
@@ -28,6 +31,14 @@ class MaiaApp extends ConsumerWidget {
       ),
       themeMode: themeSelection.mode.materialThemeMode,
       routerConfig: router,
+      builder: (context, child) {
+        return Stack(
+          children: [
+            child ?? const SizedBox.shrink(),
+            const PushPromptBanner(),
+          ],
+        );
+      },
     );
   }
 }
