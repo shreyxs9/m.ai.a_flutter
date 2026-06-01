@@ -93,8 +93,8 @@ final pushServiceProvider = Provider<PushService>((ref) {
   return PushService(ref.watch(apiClientProvider));
 });
 
-final sseServiceProvider = Provider<SseService>((ref) {
-  return SseService(ref.watch(apiClientProvider));
+final chatTransportServiceProvider = Provider<ChatTransportService>((ref) {
+  return ChatTransportService(ref.watch(apiClientProvider));
 });
 
 final authControllerProvider = AsyncNotifierProvider<AuthController, AuthState>(

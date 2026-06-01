@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
@@ -17,6 +16,9 @@ import '../projects/project_context_panel.dart';
 import '../projects/project_settings_sheet.dart';
 
 const _pageSize = 100;
+const _reconcileWindow = 40;
+const _activePollInterval = Duration(seconds: 3);
+const _idlePollInterval = Duration(seconds: 10);
 const _messageTypes = <String>{
   'maia_ask',
   'user_reply',
@@ -35,7 +37,8 @@ class ChatScreen extends ConsumerStatefulWidget {
   ConsumerState<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends ConsumerState<ChatScreen> {
+class _ChatScreenState extends ConsumerState<ChatScreen>
+    with WidgetsBindingObserver {
   final _scrollController = ScrollController();
   final _composerController = TextEditingController();
   final _composerFocus = FocusNode();
@@ -49,7 +52,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   MemberStatus? _relayTarget;
   String? _error;
   bool _loading = true;
-  bool _sending = false;
+  bool _isSending = false;
+  bool _isMaiaThinking = false;
   bool _timelineLoading = false;
   bool _loadingOlder = false;
   bool _hasMoreOlder = false;
@@ -57,31 +61,38 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   bool _didInitialScroll = false;
   bool _broadcastMode = false;
   bool _mentionOpen = false;
-  String? _streamingId;
-  String _streamingBody = '';
-  String? _streamProgress;
-  ({String code, String message})? _streamError;
+  InferenceStatus _inferenceStatus = const InferenceStatus(active: false);
+  DateTime? _lastPollAt;
+  ({String code, String message})? _pollError;
   int _projectUpdateTick = 0;
   String _mentionQuery = '';
   int _mentionStart = -1;
   int _mentionIndex = 0;
   final Set<String> _mentionedUserIds = <String>{};
-  SseStreamController? _reconnectController;
-  SseSubscriptionController? _subscriptionController;
+  Timer? _pollTimer;
+  bool _pollInFlight = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _scrollController.addListener(_onScroll);
     unawaited(_load());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_pollThread(immediate: true));
+      unawaited(_refreshProject());
+    }
   }
 
   @override
   void didUpdateWidget(covariant ChatScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.projectId != widget.projectId) {
-      _reconnectController?.abort();
-      _subscriptionController?.abort();
+      _stopPolling();
       setState(() {
         _project = null;
         _thread = null;
@@ -92,17 +103,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         _relayTarget = null;
         _error = null;
         _loading = true;
-        _sending = false;
+        _isSending = false;
+        _isMaiaThinking = false;
         _timelineLoading = false;
         _loadingOlder = false;
         _hasMoreOlder = false;
         _didInitialScroll = false;
         _broadcastMode = false;
         _mentionOpen = false;
-        _streamingId = null;
-        _streamingBody = '';
-        _streamProgress = null;
-        _streamError = null;
+        _inferenceStatus = const InferenceStatus(active: false);
+        _lastPollAt = null;
+        _pollError = null;
         _projectUpdateTick = 0;
         _mentionQuery = '';
         _mentionStart = -1;
@@ -115,8 +126,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   void dispose() {
-    _reconnectController?.abort();
-    _subscriptionController?.abort();
+    WidgetsBinding.instance.removeObserver(this);
+    _stopPolling();
     _scrollController
       ..removeListener(_onScroll)
       ..dispose();
@@ -168,7 +179,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         _loading = false;
         _error = null;
       });
-      await _startThreadStreams(thread.id);
+      _startPolling(thread.id, immediate: true);
       _scrollToBottomSoon(jump: true);
     } catch (error) {
       if (!mounted) {
@@ -181,189 +192,83 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
-  Future<void> _startThreadStreams(String threadId) async {
-    _reconnectController?.abort();
-    _subscriptionController?.abort();
-
-    final pending = await ref
-        .read(apiSessionStoreProvider)
-        .readPendingStream(threadId);
-    if (!mounted || threadId != _thread?.id) {
-      return;
+  void _startPolling(String threadId, {bool immediate = false}) {
+    _stopPolling();
+    if (immediate) {
+      unawaited(_pollThread(immediate: true));
     }
-    if (pending != null) {
-      setState(() => _sending = true);
-      _reconnectController = ref
-          .read(sseServiceProvider)
-          .reconnectStream(
-            pending.sessionId,
-            pending.lastSeq,
-            _handleStreamEvent,
-          );
-    }
-
-    _subscriptionController = ref
-        .read(sseServiceProvider)
-        .subscribeThread(threadId, _handleSubscriptionEvent);
+    _scheduleNextPoll(threadId);
   }
 
-  void _handleStreamEvent(String event, SseJsonMap data) {
-    final thread = _thread;
-    if (!mounted || thread == null) {
-      return;
-    }
-    final seq = data['seq'] is num ? (data['seq'] as num).toInt() : 0;
-
-    if (event == 'session' && data['session_id'] is String) {
-      unawaited(
-        ref
-            .read(apiSessionStoreProvider)
-            .rememberPendingStream(
-              threadId: thread.id,
-              sessionId: data['session_id'] as String,
-              lastSeq: seq,
-            ),
-      );
-      return;
-    }
-
-    unawaited(() async {
-      final pending = await ref
-          .read(apiSessionStoreProvider)
-          .readPendingStream(thread.id);
-      if (pending != null) {
-        await ref
-            .read(apiSessionStoreProvider)
-            .rememberPendingStream(
-              threadId: thread.id,
-              sessionId: pending.sessionId,
-              lastSeq: max(pending.lastSeq, seq),
-            );
-      }
-    }());
-
-    if (event == 'text-start') {
-      setState(() {
-        _streamingId = data['stream_id']?.toString() ?? 'stream';
-        _streamingBody = '';
-        _streamProgress = null;
-      });
-    } else if (event == 'text-delta') {
-      final id = data['stream_id']?.toString() ?? 'stream';
-      final chunk = data['delta']?.toString() ?? '';
-      setState(() {
-        if (_streamingId == id) {
-          _streamingBody += chunk;
-        } else {
-          _streamingId = id;
-          _streamingBody = chunk;
-        }
-        _streamProgress = null;
-      });
-      _scrollToBottomSoon();
-    } else if (event == 'text-end') {
-      // Keep the streaming bubble visible until data-message swaps it.
-    } else if (event == 'data-message') {
-      final messageData = data['message'];
-      final message = sseDataToMessage(messageData, thread.id);
-      if (message != null) {
-        setState(() {
-          _messages = _ordered(
-            _merge(_dropOptimisticTwin(_messages, [message]), [message]),
-          );
-          if (_streamingId != null &&
-              data['stream_id']?.toString() == _streamingId) {
-            _streamingId = null;
-            _streamingBody = '';
-          }
-          _streamProgress = null;
-          _streamError = null;
-        });
-        _scrollToBottomSoon();
-      }
-    } else if (event == 'data-progress') {
-      final stage = data['stage']?.toString();
-      final tool = data['tool']?.toString();
-      setState(() {
-        if (stage == 'tool_start' && tool != null && tool.isNotEmpty) {
-          _streamProgress = _toolProgressLabel(tool);
-        } else if (stage == 'tool_end') {
-          _streamProgress = 'Thinking...';
-        } else if (stage != null && stage.isNotEmpty) {
-          _streamProgress = _progressStageLabel(stage);
-        }
-      });
-      _scrollToBottomSoon();
-    } else if (event == 'finish') {
-      setState(() {
-        _sending = false;
-        _streamingId = null;
-        _streamingBody = '';
-        _streamProgress = null;
-      });
-      unawaited(
-        ref.read(apiSessionStoreProvider).clearPendingStream(thread.id),
-      );
-      _composerFocus.requestFocus();
-    } else if (event == 'error') {
-      setState(() {
-        _sending = false;
-        _streamingId = null;
-        _streamingBody = '';
-        _streamProgress = null;
-        _streamError = (
-          code: data['code']?.toString() ?? 'unknown',
-          message:
-              data['message']?.toString() ??
-              data['detail']?.toString() ??
-              'Something went wrong.',
-        );
-      });
-      unawaited(
-        ref.read(apiSessionStoreProvider).clearPendingStream(thread.id),
-      );
-      _composerFocus.requestFocus();
-      _scrollToBottomSoon();
-    }
+  void _stopPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    _pollInFlight = false;
   }
 
-  void _handleSubscriptionEvent(String event, SseJsonMap data) {
-    final thread = _thread;
-    if (!mounted || thread == null) {
-      return;
-    }
-    if (event == 'new_message') {
-      final message = sseDataToMessage(data, thread.id);
-      if (message == null) {
-        return;
-      }
-      setState(() {
-        _messages = _ordered(
-          _merge(_dropOptimisticTwin(_messages, [message]), [message]),
-        );
-      });
-      _scrollToBottomSoon();
-    } else if (event == 'project_updated') {
-      setState(() => _projectUpdateTick += 1);
-      unawaited(_refreshProject());
-    } else if (event == 'resubscribed') {
-      unawaited(_refetchMessages(thread.id));
-    }
-  }
-
-  Future<void> _refetchMessages(String threadId) async {
-    try {
-      final latest = await ref
-          .read(threadServiceProvider)
-          .listMessages(threadId, limit: _pageSize);
+  void _scheduleNextPoll(String threadId) {
+    _pollTimer?.cancel();
+    final interval = chatPollInterval(
+      isSending: _isSending,
+      inferenceActive: _inferenceStatus.active,
+    );
+    _pollTimer = Timer(interval, () {
       if (!mounted || threadId != _thread?.id) {
         return;
       }
+      unawaited(_pollThread());
+    });
+  }
+
+  Future<void> _pollThread({bool immediate = false}) async {
+    final thread = _thread;
+    if (thread == null || _pollInFlight) {
+      return;
+    }
+    _pollInFlight = true;
+    try {
+      final results = await Future.wait<Object?>([
+        ref
+            .read(threadServiceProvider)
+            .listMessages(thread.id, limit: _reconcileWindow),
+        ref.read(chatTransportServiceProvider).getInferenceStatus(thread.id),
+      ]);
+      if (!mounted || thread.id != _thread?.id) {
+        return;
+      }
+      final latest = results[0] as List<Message>;
+      final status = results[1] as InferenceStatus;
       setState(() {
-        _messages = _ordered(_merge(_messages, latest));
-        _hasMoreOlder = latest.length >= _pageSize;
+        _messages = _ordered(
+          _merge(_dropOptimisticTwin(_messages, latest), latest),
+        );
+        _inferenceStatus = status;
+        if (!status.active) {
+          _isSending = false;
+        }
+        _isMaiaThinking = _isSending || status.active;
+        _lastPollAt = DateTime.now();
+        _pollError = null;
       });
-    } catch (_) {}
+      if (latest.isNotEmpty || immediate) {
+        _scrollToBottomSoon();
+      }
+      if (!status.active) {
+        _composerFocus.requestFocus();
+      }
+    } catch (error) {
+      if (mounted && thread.id == _thread?.id) {
+        setState(() {
+          _lastPollAt = DateTime.now();
+          _pollError = (code: 'poll_failed', message: _messageFor(error));
+        });
+      }
+    } finally {
+      _pollInFlight = false;
+      if (mounted && thread.id == _thread?.id) {
+        _scheduleNextPoll(thread.id);
+      }
+    }
   }
 
   void _onScroll() {
@@ -424,7 +329,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final auth = ref.read(authControllerProvider).asData?.value;
     final userId = auth?.user?.id;
     final body = _composerController.text.trim();
-    if (thread == null || body.isEmpty || _sending) {
+    if (thread == null || body.isEmpty || _isSending) {
       return;
     }
 
@@ -441,36 +346,69 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final mentionUserIds = _canonicalMentionUserIds(body);
     _composerController.clear();
     setState(() {
-      _sending = true;
+      _isSending = true;
+      _isMaiaThinking = true;
       _mentionOpen = false;
       _mentionedUserIds.clear();
-      _streamingId = null;
-      _streamingBody = '';
-      _streamProgress = null;
-      _streamError = null;
+      _pollError = null;
       _messages = _ordered(_merge(_messages, [optimistic]));
     });
     _scrollToBottomSoon();
 
-    ref
-        .read(sseServiceProvider)
-        .sendAndStream(
-          thread.id,
-          body,
-          _handleStreamEvent,
-          mentionUserIds: mentionUserIds,
-          onSession: (sessionId) {
-            unawaited(
-              ref
-                  .read(apiSessionStoreProvider)
-                  .rememberPendingStream(
-                    threadId: thread.id,
-                    sessionId: sessionId,
-                    lastSeq: 0,
-                  ),
-            );
-          },
+    try {
+      final result = await ref
+          .read(chatTransportServiceProvider)
+          .sendMessage(thread.id, body, mentionUserIds: mentionUserIds);
+      if (!mounted || thread.id != _thread?.id) {
+        return;
+      }
+      if (result.pending) {
+        setState(() {
+          _isSending = true;
+          _isMaiaThinking = true;
+          _inferenceStatus = InferenceStatus(
+            active: true,
+            sessionId: result.sessionId,
+          );
+        });
+        await _pollThread(immediate: true);
+        return;
+      }
+      final maiaResponse = result.maiaResponse;
+      setState(() {
+        if (maiaResponse != null) {
+          _messages = _ordered(
+            _merge(_dropOptimisticTwin(_messages, [maiaResponse]), [
+              maiaResponse,
+            ]),
+          );
+        }
+        _isSending = false;
+        _isMaiaThinking = false;
+        _inferenceStatus = InferenceStatus(
+          active: false,
+          sessionId: result.sessionId,
         );
+      });
+      unawaited(_pollThread(immediate: true));
+      _composerFocus.requestFocus();
+      _scrollToBottomSoon();
+    } catch (error) {
+      if (!mounted || thread.id != _thread?.id) {
+        return;
+      }
+      setState(() {
+        _messages = _messages
+            .where((message) => message.id != optimistic.id)
+            .toList(growable: false);
+        _isSending = false;
+        _isMaiaThinking = _inferenceStatus.active;
+        _pollError = (code: 'send_failed', message: _messageFor(error));
+      });
+      _composerController.text = body;
+      _composerFocus.requestFocus();
+      _scrollToBottomSoon();
+    }
   }
 
   Future<void> _confirmBroadcast(String body) async {
@@ -480,7 +418,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
     final confirmed = await showDialog<bool>(
       context: context,
-      barrierDismissible: !_sending,
+      barrierDismissible: !_isSending,
       builder: (context) =>
           _BroadcastConfirmDialog(project: project, preview: body),
     );
@@ -489,7 +427,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       return;
     }
 
-    setState(() => _sending = true);
+    setState(() => _isSending = true);
     try {
       final created = await ref
           .read(messageServiceProvider)
@@ -514,7 +452,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       ).showSnackBar(SnackBar(content: Text(_messageFor(error))));
     } finally {
       if (mounted) {
-        setState(() => _sending = false);
+        setState(() => _isSending = false);
         _composerFocus.requestFocus();
       }
     }
@@ -526,10 +464,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     String? repliesToMessageId,
   }) async {
     final project = _project;
-    if (project == null || body.trim().isEmpty || _sending) {
+    if (project == null || body.trim().isEmpty || _isSending) {
       return;
     }
-    setState(() => _sending = true);
+    setState(() => _isSending = true);
     try {
       final created = await ref
           .read(messageServiceProvider)
@@ -558,7 +496,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
     } finally {
       if (mounted) {
-        setState(() => _sending = false);
+        setState(() => _isSending = false);
       }
     }
   }
@@ -832,7 +770,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                 currentUserId: currentUserId,
                                 messages: _memberTimeline,
                                 loading: _timelineLoading,
-                                sending: _sending,
+                                sending: _isSending,
                                 onBack: () => setState(() {
                                   _activeMemberId = null;
                                   _memberTimeline = const <Message>[];
@@ -848,7 +786,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         _Composer(
                           controller: _composerController,
                           focusNode: _composerFocus,
-                          sending: _sending,
+                          sending: _isSending,
                           broadcastMode: _broadcastMode,
                           mentionOpen: _mentionOpen,
                           mentionIndex: _mentionIndex,
@@ -922,7 +860,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final currentUserId = auth?.user?.id;
     final messagesById = {for (final message in _messages) message.id: message};
 
-    if (_messages.isEmpty && !_sending && _streamError == null) {
+    if (_messages.isEmpty && !_isMaiaThinking && _pollError == null) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
@@ -952,7 +890,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       );
     }
 
-    final statusCount = _streamStatusCount;
+    final statusCount = _pollStatusCount;
     return ListView.builder(
       controller: _scrollController,
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 22),
@@ -1009,42 +947,25 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
   }
 
-  int get _streamStatusCount {
-    if (_streamError != null) {
+  int get _pollStatusCount {
+    if (_pollError != null) {
       return 1;
     }
-    if (_sending && _streamingBody.isNotEmpty) {
-      return _streamProgress == null ? 1 : 2;
-    }
-    if (_sending) {
+    if (_isMaiaThinking) {
       return 1;
     }
     return 0;
   }
 
   Widget _buildStreamStatus(int statusIndex) {
-    if (_streamError != null) {
+    if (_pollError != null) {
       return _StreamErrorBanner(
-        error: _streamError!,
-        onDismiss: () => setState(() => _streamError = null),
+        error: _pollError!,
+        onDismiss: () => setState(() => _pollError = null),
       );
     }
-    if (_sending && _streamingBody.isNotEmpty) {
-      if (statusIndex == 0) {
-        return _StreamingBubble(body: _streamingBody);
-      }
-      return _ProgressPill(label: _streamProgress!);
-    }
-    if (_sending && _streamProgress != null) {
-      return _ProgressPill(label: _streamProgress!);
-    }
-    return const Padding(
-      padding: EdgeInsets.symmetric(vertical: 8),
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: SpinnerWidget(size: 18),
-      ),
-    );
+    final hasPolled = _lastPollAt != null;
+    return _ProgressPill(label: hasPolled ? 'Thinking...' : 'Thinking...');
   }
 
   Future<void> _showProjectSettings(
@@ -1060,44 +981,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         project: project,
         isCurrentUserAdmin: isAdmin,
         onUpdated: _refreshProject,
-      ),
-    );
-  }
-}
-
-class _StreamingBubble extends StatelessWidget {
-  const _StreamingBubble({required this.body});
-
-  final String body;
-
-  @override
-  Widget build(BuildContext context) {
-    final tokens = context.maia;
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 6),
-        constraints: const BoxConstraints(maxWidth: 680),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        decoration: BoxDecoration(
-          color: tokens.backgroundRaised,
-          borderRadius: const BorderRadius.only(
-            topLeft: Radius.circular(18),
-            topRight: Radius.circular(18),
-            bottomRight: Radius.circular(18),
-            bottomLeft: Radius.circular(4),
-          ),
-          border: Border.all(color: tokens.border),
-        ),
-        child: MarkdownBody(
-          data: body,
-          selectable: true,
-          styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
-            p: Theme.of(
-              context,
-            ).textTheme.bodyMedium?.copyWith(color: tokens.text, height: 1.35),
-          ),
-        ),
       ),
     );
   }
@@ -1149,7 +1032,6 @@ class _StreamErrorBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = context.maia;
-    final retryable = _retryableStreamErrorCodes.contains(error.code);
     return Align(
       alignment: Alignment.centerLeft,
       child: Container(
@@ -1180,10 +1062,7 @@ class _StreamErrorBanner extends StatelessWidget {
                 ).textTheme.bodySmall?.copyWith(color: tokens.text),
               ),
             ),
-            TextButton(
-              onPressed: onDismiss,
-              child: Text(retryable ? 'dismiss' : 'ok'),
-            ),
+            TextButton(onPressed: onDismiss, child: const Text('ok')),
           ],
         ),
       ),
@@ -3191,43 +3070,6 @@ Message _optimisticMessage({
   );
 }
 
-Message? sseDataToMessage(Object? data, String fallbackThreadId) {
-  if (data is! Map) {
-    return null;
-  }
-  final map = data.map((key, value) => MapEntry('$key', value));
-  final id = map['id']?.toString();
-  if (id == null || id.isEmpty) {
-    return null;
-  }
-  return Message(
-    id: id,
-    threadId: map['thread_id']?.toString() ?? fallbackThreadId,
-    type: map['type']?.toString() ?? '',
-    body: map['body']?.toString(),
-    tone: map['tone']?.toString(),
-    fromUserId: map['from_user_id']?.toString(),
-    toUserId: map['to_user_id']?.toString(),
-    toAudience: map['to_audience']?.toString(),
-    recipient: map['recipient'] == null
-        ? null
-        : Recipient.fromJson(map['recipient']),
-    repliesToMessageId: map['replies_to_message_id']?.toString(),
-    replyToPreview: map['reply_to_preview'] == null
-        ? null
-        : ReplyPreview.fromJson(map['reply_to_preview']),
-    originalText: map['original_text']?.toString(),
-    extra: map['extra'] is Map
-        ? (map['extra'] as Map).map((key, value) => MapEntry('$key', value))
-        : null,
-    promptVersionId: map['prompt_version_id']?.toString(),
-    createdAt:
-        DateTime.tryParse(map['created_at']?.toString() ?? '') ??
-        DateTime.now(),
-    resolvedAt: DateTime.tryParse(map['resolved_at']?.toString() ?? ''),
-  );
-}
-
 List<Message> _merge(List<Message> current, List<Message> incoming) {
   return mergeMessagesById(current, incoming);
 }
@@ -3296,26 +3138,11 @@ List<Message> _ordered(List<Message> messages) {
   return sorted;
 }
 
-const _retryableStreamErrorCodes = <String>{
-  'rate_limit',
-  'overload',
-  'timeout',
-  'pipeline_failure',
-};
-
-String _toolProgressLabel(String tool) {
-  return switch (tool) {
-    'search_messages' => 'Searching the thread...',
-    _ => 'Looking something up...',
-  };
-}
-
-String _progressStageLabel(String stage) {
-  return switch (stage) {
-    'model_fallback' => 'Switching to backup model...',
-    'tool_end' => 'Thinking...',
-    _ => 'Working on it...',
-  };
+Duration chatPollInterval({
+  required bool isSending,
+  required bool inferenceActive,
+}) {
+  return isSending || inferenceActive ? _activePollInterval : _idlePollInterval;
 }
 
 String _messageFor(Object error) {

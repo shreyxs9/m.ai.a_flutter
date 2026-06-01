@@ -721,69 +721,6 @@ class Message {
   };
 }
 
-class SseMessage {
-  const SseMessage({
-    required this.id,
-    required this.threadId,
-    required this.type,
-    required this.body,
-    required this.tone,
-    required this.fromUserId,
-    required this.toUserId,
-    required this.toAudience,
-    required this.repliesToMessageId,
-    required this.originalText,
-    required this.extra,
-    required this.createdAt,
-  });
-
-  factory SseMessage.fromJson(Object? json) {
-    final data = _map(json);
-    return SseMessage(
-      id: _string(data['id']),
-      threadId: _nullableString(data['thread_id']),
-      type: _string(data['type']),
-      body: _nullableString(data['body']),
-      tone: _nullableString(data['tone']),
-      fromUserId: _nullableString(data['from_user_id']),
-      toUserId: _nullableString(data['to_user_id']),
-      toAudience: _nullableString(data['to_audience']),
-      repliesToMessageId: _nullableString(data['replies_to_message_id']),
-      originalText: _nullableString(data['original_text']),
-      extra: data['extra'] == null ? null : _map(data['extra']),
-      createdAt: _date(data['created_at']),
-    );
-  }
-
-  final String id;
-  final String? threadId;
-  final String type;
-  final String? body;
-  final String? tone;
-  final String? fromUserId;
-  final String? toUserId;
-  final String? toAudience;
-  final String? repliesToMessageId;
-  final String? originalText;
-  final JsonMap? extra;
-  final DateTime createdAt;
-
-  JsonMap toJson() => {
-    'id': id,
-    'thread_id': threadId,
-    'type': type,
-    'body': body,
-    'tone': tone,
-    'from_user_id': fromUserId,
-    'to_user_id': toUserId,
-    'to_audience': toAudience,
-    'replies_to_message_id': repliesToMessageId,
-    'original_text': originalText,
-    'extra': extra,
-    'created_at': _dateToJson(createdAt),
-  };
-}
-
 class SearchResult {
   const SearchResult({
     required this.id,

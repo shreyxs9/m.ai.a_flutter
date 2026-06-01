@@ -153,88 +153,41 @@ void main() {
     });
   });
 
-  group('SSE streaming', () {
-    test('parses event and data lines', () async {
-      final frames = <SseFrame>[];
-      final parser = SseLineParser();
+  group('poll-only chat transport', () {
+    test('parses 200 send response with maia_response', () async {
+      final client = ApiClient(
+        dio: _dioWithResponse(
+          statusCode: 200,
+          body:
+              '{"session_id":"session-1","maia_response":${_messageJson('m-ai', type: 'maia_note', body: 'Got it.')}}',
+          contentType: Headers.jsonContentType,
+        ),
+      );
+      final service = ChatTransportService(client);
 
-      for (final line in [
-        'event: text-delta',
-        'data: {"delta":"Hel","seq":2}',
-      ]) {
-        final frame = parser.parseLine(line);
-        if (frame != null) {
-          frames.add(frame);
-        }
-      }
+      final result = await service.sendMessage('thread-1', 'Progress update');
 
-      expect(frames, hasLength(1));
-      expect(frames.single.event, 'text-delta');
-      expect(frames.single.data['delta'], 'Hel');
-      expect(frames.single.data['seq'], 2);
+      expect(result.pending, isFalse);
+      expect(result.sessionId, 'session-1');
+      expect(result.maiaResponse?.id, 'm-ai');
+      expect(result.maiaResponse?.body, 'Got it.');
     });
 
-    test('accumulates text-delta frames in stream order', () async {
-      var body = '';
-      await parseSseByteStream(
-        Stream<List<int>>.fromIterable([
-          'event: text-start\n'
-                  'data: {"stream_id":"s1","seq":1}\n'
-                  'event: text-delta\n'
-                  'data: {"stream_id":"s1","delta":"Hel","seq":2}\n'
-                  'event: text-delta\n'
-                  'data: {"stream_id":"s1","delta":"lo","seq":3}\n'
-              .codeUnits,
-        ]),
-        (event, data) {
-          if (event == 'text-start') {
-            body = '';
-          } else if (event == 'text-delta') {
-            body += data['delta']?.toString() ?? '';
-          }
-        },
+    test('parses 202 pending send response', () async {
+      final client = ApiClient(
+        dio: _dioWithResponse(
+          statusCode: 202,
+          body: '{"session_id":"session-2","pending":true}',
+          contentType: Headers.jsonContentType,
+        ),
       );
+      final service = ChatTransportService(client);
 
-      expect(body, 'Hello');
-    });
+      final result = await service.sendMessage('thread-1', 'Slow update');
 
-    test('parses error frames with code and message', () async {
-      final parser = SseLineParser()..parseLine('event: error');
-      final frame = parser.parseLine(
-        'data: {"code":"rate_limit","message":"Slow down","seq":4}',
-      );
-
-      expect(frame?.event, 'error');
-      expect(frame?.data['code'], 'rate_limit');
-      expect(frame?.data['message'], 'Slow down');
-    });
-  });
-
-  group('pending stream persistence', () {
-    test('clears expired stream sessions after four minutes', () async {
-      SharedPreferences.setMockInitialValues({});
-      const store = ApiSessionStore();
-      final savedAt = DateTime(2026, 5, 22, 12);
-      await store.rememberPendingStream(
-        threadId: 'thread-1',
-        sessionId: 'session-1',
-        lastSeq: 7,
-        now: savedAt,
-      );
-
-      final fresh = await store.readPendingStream(
-        'thread-1',
-        now: savedAt.add(const Duration(minutes: 3, seconds: 59)),
-      );
-      expect(fresh?.sessionId, 'session-1');
-      expect(fresh?.lastSeq, 7);
-
-      final expired = await store.readPendingStream(
-        'thread-1',
-        now: savedAt.add(const Duration(minutes: 4, seconds: 1)),
-      );
-      expect(expired, isNull);
-      expect(await store.readPendingStream('thread-1', now: savedAt), isNull);
+      expect(result.pending, isTrue);
+      expect(result.sessionId, 'session-2');
+      expect(result.maiaResponse, isNull);
     });
   });
 
@@ -255,6 +208,57 @@ void main() {
       expect(merged.first.body, 'new');
       expect(merged.first.extra, {'kept': true});
     });
+
+    test('updates attachment status in place by message id', () {
+      final existing = [
+        _message(
+          'm1',
+          body: 'photo',
+          extra: {
+            'attachments': [
+              {'asset_id': 'a1', 'status': 'pending'},
+            ],
+          },
+        ),
+      ];
+      final incoming = [
+        _message(
+          'm1',
+          body: 'photo',
+          extra: {
+            'attachments': [
+              {'asset_id': 'a1', 'status': 'ready'},
+            ],
+          },
+        ),
+      ];
+
+      final merged = mergeMessagesById(existing, incoming);
+      final attachments = merged.single.extra?['attachments'] as List<dynamic>;
+
+      expect(merged, hasLength(1));
+      expect((attachments.single as Map)['status'], 'ready');
+    });
+  });
+
+  group('polling cadence', () {
+    test('uses active interval while sending or inference is active', () {
+      expect(
+        chatPollInterval(isSending: true, inferenceActive: false),
+        const Duration(seconds: 3),
+      );
+      expect(
+        chatPollInterval(isSending: false, inferenceActive: true),
+        const Duration(seconds: 3),
+      );
+    });
+
+    test('uses idle interval when no send or inference is active', () {
+      expect(
+        chatPollInterval(isSending: false, inferenceActive: false),
+        const Duration(seconds: 10),
+      );
+    });
   });
 }
 
@@ -269,6 +273,29 @@ Map<String, dynamic> _userJson() => {
   'created_at': '2026-05-15T06:00:00Z',
   'updated_at': '2026-05-15T06:10:00Z',
 };
+
+String _messageJson(String id, {required String type, required String body}) {
+  return '''
+{
+  "id": "$id",
+  "thread_id": "thread-1",
+  "type": "$type",
+  "body": "$body",
+  "tone": null,
+  "from_user_id": null,
+  "to_user_id": null,
+  "to_audience": null,
+  "recipient": null,
+  "replies_to_message_id": null,
+  "reply_to_preview": null,
+  "original_text": null,
+  "extra": null,
+  "prompt_version_id": null,
+  "created_at": "2026-05-22T12:00:01Z",
+  "resolved_at": null
+}
+''';
+}
 
 Message _message(
   String id, {
