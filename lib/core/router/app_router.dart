@@ -25,27 +25,31 @@ final appRouterProvider = Provider<GoRouter>((ref) {
 
       final authenticated = auth?.isAuthenticated ?? false;
       final onLogin = state.matchedLocation == '/login';
+      final onWelcome = state.matchedLocation == '/welcome';
       final onInvite = state.matchedLocation.startsWith('/join/');
-      final onWorkspaceInvite =
-          state.matchedLocation.startsWith('/join-workspace/');
+      final onWorkspaceInvite = state.matchedLocation.startsWith(
+        '/join-workspace/',
+      );
 
-      if (!authenticated && !onLogin && !onInvite && !onWorkspaceInvite) {
+      if (!authenticated &&
+          !onLogin &&
+          !onWelcome &&
+          !onInvite &&
+          !onWorkspaceInvite) {
         return '/login';
       }
-      if (authenticated && onLogin) {
+      if (authenticated && (onLogin || onWelcome)) {
         return '/';
       }
       return null;
     },
     routes: [
       GoRoute(
-        path: '/login',
+        path: '/welcome',
         builder: (context, state) => const LoginScreen(),
       ),
-      GoRoute(
-        path: '/',
-        builder: (context, state) => const ProjectsScreen(),
-      ),
+      GoRoute(path: '/login', builder: (context, state) => const LoginScreen()),
+      GoRoute(path: '/', builder: (context, state) => const ProjectsScreen()),
       GoRoute(
         path: '/join/:code',
         builder: (context, state) {
@@ -70,10 +74,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           );
         },
       ),
-      GoRoute(
-        path: '/admin',
-        builder: (context, state) => const AdminScreen(),
-      ),
+      GoRoute(path: '/admin', builder: (context, state) => const AdminScreen()),
       GoRoute(
         path: '/debug/theme',
         builder: (context, state) => const ThemePreviewScreen(),
@@ -84,10 +85,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           return ChatScreen(projectId: state.pathParameters['projectId'] ?? '');
         },
       ),
-      GoRoute(
-        path: '/:path(.*)',
-        redirect: (context, state) => '/',
-      ),
+      GoRoute(path: '/:path(.*)', redirect: (context, state) => '/'),
     ],
   );
 });
