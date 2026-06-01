@@ -15,6 +15,7 @@ import '../../models/models.dart';
 import '../projects/project_avatar_widget.dart';
 import '../projects/project_context_panel.dart';
 import '../projects/project_settings_sheet.dart';
+import 'video_attachment_preview.dart';
 
 const _pageSize = 100;
 const _reconcileWindow = 40;
@@ -1899,6 +1900,7 @@ class _AttachmentTile extends ConsumerWidget {
             ? signed!.status
             : attachment.status;
         final isImage = (signed?.kind ?? attachment.kind) == 'image';
+        final isVideo = (signed?.kind ?? attachment.kind) == 'video';
         return InkWell(
           onTap: signed?.url == null
               ? null
@@ -1926,6 +1928,11 @@ class _AttachmentTile extends ConsumerWidget {
                           icon: Icons.broken_image_outlined,
                           color: tokens.faint,
                         ),
+                  )
+                else if (signed?.url != null && isVideo)
+                  VideoAttachmentPreview(
+                    key: ValueKey(signed!.url),
+                    url: signed.url,
                   )
                 else
                   _AttachmentPlaceholder(
