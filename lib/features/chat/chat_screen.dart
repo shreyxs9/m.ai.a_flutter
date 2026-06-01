@@ -625,7 +625,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       builder: (context) => _TriggerConfirmDialog(
         title: 'Trigger on-demand check-in?',
         body:
-            'Maia will ask check-in-enabled project members for an update now.',
+            'This sends a check-in prompt to check-in-enabled project members now.',
         actionLabel: 'Trigger check-in',
       ),
     );
@@ -2508,7 +2508,7 @@ class _TriggerMenuButton extends StatelessWidget {
     final busy = triggerCheckinBusy || triggerSummaryBusy;
     return PopupMenuButton<_TriggerAction>(
       enabled: !disabled,
-      tooltip: 'Trigger',
+      tooltip: 'Trigger actions',
       position: PopupMenuPosition.over,
       onSelected: (action) {
         switch (action) {
@@ -2527,7 +2527,7 @@ class _TriggerMenuButton extends StatelessWidget {
             title: triggerCheckinBusy
                 ? 'Starting check-in...'
                 : 'On-demand check-in',
-            subtitle: 'Ask check-in-enabled members now',
+            subtitle: 'Send check-in prompts now',
           ),
         ),
         PopupMenuItem<_TriggerAction>(
@@ -2536,7 +2536,7 @@ class _TriggerMenuButton extends StatelessWidget {
           child: _TriggerMenuItem(
             icon: Icons.summarize_outlined,
             title: triggerSummaryBusy ? 'Starting summary...' : 'Team summary',
-            subtitle: 'Generate summaries and team digest',
+            subtitle: 'Generate the team digest now',
           ),
         ),
       ],
