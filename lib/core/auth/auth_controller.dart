@@ -77,6 +77,10 @@ final messageServiceProvider = Provider<MessageService>((ref) {
   return MessageService(ref.watch(apiClientProvider));
 });
 
+final mediaServiceProvider = Provider<MediaService>((ref) {
+  return MediaService(ref.watch(apiClientProvider));
+});
+
 final userServiceProvider = Provider<UserService>((ref) {
   return UserService(ref.watch(apiClientProvider));
 });

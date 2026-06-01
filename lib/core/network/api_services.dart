@@ -440,6 +440,61 @@ class MessageService {
   }
 }
 
+Map<String, dynamic> _mediaMap(Object? value) {
+  if (value is Map<String, dynamic>) {
+    return value;
+  }
+  if (value is Map) {
+    return value.map((key, value) => MapEntry('$key', value));
+  }
+  return <String, dynamic>{};
+}
+
+class MediaDownloadUrl {
+  const MediaDownloadUrl({
+    required this.assetId,
+    required this.kind,
+    required this.status,
+    required this.url,
+    required this.thumbUrl,
+    required this.expiresInSeconds,
+  });
+
+  factory MediaDownloadUrl.fromJson(Object? json) {
+    final data = _mediaMap(json);
+    return MediaDownloadUrl(
+      assetId: data['asset_id']?.toString() ?? '',
+      kind: data['kind']?.toString() ?? '',
+      status: data['status']?.toString() ?? '',
+      url: data['url']?.toString() ?? '',
+      thumbUrl: data['thumb_url']?.toString(),
+      expiresInSeconds: data['expires_in_seconds'] is num
+          ? (data['expires_in_seconds'] as num).toInt()
+          : int.tryParse(data['expires_in_seconds']?.toString() ?? '') ?? 0,
+    );
+  }
+
+  final String assetId;
+  final String kind;
+  final String status;
+  final String url;
+  final String? thumbUrl;
+  final int expiresInSeconds;
+}
+
+class MediaService {
+  const MediaService(this.client);
+
+  final ApiClient client;
+
+  Future<MediaDownloadUrl?> downloadUrl(String assetId) {
+    return client.get(
+      '/media/${Uri.encodeComponent(assetId)}/download-url',
+      parse: MediaDownloadUrl.fromJson,
+    );
+  }
+}
+
 class UserService {
   const UserService(this.client);
 

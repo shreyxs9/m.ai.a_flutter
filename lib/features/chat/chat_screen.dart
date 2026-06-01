@@ -5,6 +5,7 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/auth/auth_controller.dart';
 import '../../core/network/network.dart';
@@ -27,6 +28,59 @@ const _messageTypes = <String>{
   'maia_summary',
   'maia_digest',
 };
+
+class MessageAttachmentRef {
+  const MessageAttachmentRef({
+    required this.assetId,
+    required this.ref,
+    required this.kind,
+    required this.status,
+    required this.mimeType,
+  });
+
+  final String assetId;
+  final String ref;
+  final String kind;
+  final String status;
+  final String? mimeType;
+}
+
+bool isRelayMediaConfirmMessage(Message message) {
+  return message.type == 'maia_note' &&
+      message.extra?['kind']?.toString() == 'relay_media_confirm';
+}
+
+List<MessageAttachmentRef> messageAttachmentsOf(Message message) {
+  final raw = message.extra?['attachments'];
+  if (raw is! List) {
+    return const <MessageAttachmentRef>[];
+  }
+  final attachments = <MessageAttachmentRef>[];
+  for (final value in raw) {
+    if (value is! Map) {
+      continue;
+    }
+    final assetId = value['asset_id']?.toString();
+    if (assetId == null || assetId.isEmpty) {
+      continue;
+    }
+    attachments.add(
+      MessageAttachmentRef(
+        assetId: assetId,
+        ref: value['ref']?.toString() ?? 'media',
+        kind: value['kind']?.toString() ?? 'image',
+        status: value['status']?.toString() ?? 'pending',
+        mimeType: value['mime_type']?.toString(),
+      ),
+    );
+  }
+  return attachments;
+}
+
+bool shouldRenderChatMessage(Message message) {
+  final body = (message.body ?? '').trim();
+  return body.isNotEmpty || messageAttachmentsOf(message).isNotEmpty;
+}
 
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({required this.projectId, super.key});
@@ -435,6 +489,79 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       });
       _composerController.text = body;
       _composerFocus.requestFocus();
+      _scrollToBottomSoon();
+    }
+  }
+
+  Future<void> _sendConfirmationReply(String body) async {
+    final thread = _thread;
+    final auth = ref.read(authControllerProvider).asData?.value;
+    final userId = auth?.user?.id;
+    final normalized = body.trim();
+    if (thread == null || normalized.isEmpty || _isSending) {
+      return;
+    }
+
+    final optimistic = _optimisticMessage(
+      threadId: thread.id,
+      body: normalized,
+      userId: userId,
+    );
+    setState(() {
+      _isSending = true;
+      _isMaiaThinking = true;
+      _pollError = null;
+      _messages = _ordered(_merge(_messages, [optimistic]));
+    });
+    _scrollToBottomSoon();
+
+    try {
+      final result = await ref
+          .read(chatTransportServiceProvider)
+          .sendMessage(thread.id, normalized);
+      if (!mounted || thread.id != _thread?.id) {
+        return;
+      }
+      if (result.pending) {
+        setState(() {
+          _inferenceStatus = InferenceStatus(
+            active: true,
+            sessionId: result.sessionId,
+          );
+        });
+        await _pollThread(immediate: true);
+        return;
+      }
+      final maiaResponse = result.maiaResponse;
+      setState(() {
+        if (maiaResponse != null) {
+          _messages = _ordered(
+            _merge(_dropOptimisticTwin(_messages, [maiaResponse]), [
+              maiaResponse,
+            ]),
+          );
+        }
+        _isSending = false;
+        _isMaiaThinking = false;
+        _inferenceStatus = InferenceStatus(
+          active: false,
+          sessionId: result.sessionId,
+        );
+      });
+      unawaited(_pollThread(immediate: true));
+      _scrollToBottomSoon();
+    } catch (error) {
+      if (!mounted || thread.id != _thread?.id) {
+        return;
+      }
+      setState(() {
+        _messages = _messages
+            .where((message) => message.id != optimistic.id)
+            .toList(growable: false);
+        _isSending = false;
+        _isMaiaThinking = _inferenceStatus.active;
+        _pollError = (code: 'send_failed', message: _messageFor(error));
+      });
       _scrollToBottomSoon();
     }
   }
@@ -1049,6 +1176,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
           messagesById: messagesById,
           myThreadId: _thread?.id,
           onToggleResolved: _toggleResolved,
+          onConfirmMediaRelay: _sendConfirmationReply,
           onRelayReply: (message, body) => _sendRelay(
             targetUserId: message.recipient?.kind == 'everyone'
                 ? null
@@ -1284,6 +1412,7 @@ class _MessageBubble extends StatelessWidget {
     required this.currentUserId,
     required this.messagesById,
     required this.onToggleResolved,
+    required this.onConfirmMediaRelay,
     required this.myThreadId,
     this.forceExpandedRelay = false,
     this.onRelayReply,
@@ -1296,6 +1425,7 @@ class _MessageBubble extends StatelessWidget {
   final String? myThreadId;
   final Future<void> Function(String messageId, bool nextResolved)
   onToggleResolved;
+  final Future<void> Function(String body) onConfirmMediaRelay;
   final bool forceExpandedRelay;
   final Future<void> Function(Message message, String body)? onRelayReply;
 
@@ -1303,6 +1433,12 @@ class _MessageBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final tokens = context.maia;
     final extra = message.extra;
+    if (isRelayMediaConfirmMessage(message)) {
+      return _RelayMediaConfirmBubble(
+        message: message,
+        onConfirm: onConfirmMediaRelay,
+      );
+    }
     if (message.type == 'maia_note') {
       final kind = extra?['kind']?.toString();
       if (kind == 'relay_sent' || kind == 'broadcast_sent') {
@@ -1323,7 +1459,8 @@ class _MessageBubble extends StatelessWidget {
     final isDigest = message.type == 'maia_digest';
     final isDanger = message.tone == 'danger';
     final body = (message.body ?? '').trim();
-    if (body.isEmpty) {
+    final attachments = messageAttachmentsOf(message);
+    if (body.isEmpty && attachments.isEmpty) {
       return const SizedBox.shrink();
     }
     final isRecipientRelay =
@@ -1394,9 +1531,9 @@ class _MessageBubble extends StatelessWidget {
                           _QuotePreview(quote: quote, inverted: isUser),
                           const SizedBox(height: 8),
                         ],
-                        if (isDigest)
+                        if (body.isNotEmpty && isDigest)
                           _MessageCardMarkdown(body: body, color: textColor)
-                        else
+                        else if (body.isNotEmpty)
                           MarkdownBody(
                             data: body,
                             selectable: true,
@@ -1421,6 +1558,10 @@ class _MessageBubble extends StatelessWidget {
                                   ),
                                 ),
                           ),
+                        if (attachments.isNotEmpty) ...[
+                          if (body.isNotEmpty) const SizedBox(height: 8),
+                          _AttachmentGrid(attachments: attachments),
+                        ],
                       ],
                     ),
                   ),
@@ -1579,6 +1720,331 @@ class _MessageCardMarkdown extends StatelessWidget {
         listBullet: Theme.of(
           context,
         ).textTheme.bodyMedium?.copyWith(color: color),
+      ),
+    );
+  }
+}
+
+class _RelayMediaConfirmBubble extends StatefulWidget {
+  const _RelayMediaConfirmBubble({
+    required this.message,
+    required this.onConfirm,
+  });
+
+  final Message message;
+  final Future<void> Function(String body) onConfirm;
+
+  @override
+  State<_RelayMediaConfirmBubble> createState() =>
+      _RelayMediaConfirmBubbleState();
+}
+
+class _RelayMediaConfirmBubbleState extends State<_RelayMediaConfirmBubble> {
+  bool _busy = false;
+
+  Future<void> _submit(String body) async {
+    if (_busy) {
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      await widget.onConfirm(body);
+    } finally {
+      if (mounted) {
+        setState(() => _busy = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.maia;
+    final body = (widget.message.body ?? '').trim();
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const MaiaMarkWidget(size: 28),
+          const SizedBox(width: 8),
+          Flexible(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 640),
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                decoration: BoxDecoration(
+                  color: tokens.accent.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: tokens.accent.withValues(alpha: 0.34),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.forward_to_inbox_rounded,
+                          size: 16,
+                          color: tokens.accent,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Confirm media relay',
+                          style: Theme.of(context).textTheme.labelMedium
+                              ?.copyWith(
+                                color: tokens.accent,
+                                fontWeight: FontWeight.w800,
+                              ),
+                        ),
+                      ],
+                    ),
+                    if (body.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      MarkdownBody(
+                        data: body,
+                        selectable: true,
+                        styleSheet:
+                            MarkdownStyleSheet.fromTheme(
+                              Theme.of(context),
+                            ).copyWith(
+                              p: Theme.of(context).textTheme.bodyMedium
+                                  ?.copyWith(color: tokens.text, height: 1.36),
+                            ),
+                      ),
+                    ],
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        FilledButton.icon(
+                          onPressed: _busy
+                              ? null
+                              : () => _submit('yes send it'),
+                          icon: _busy
+                              ? const SpinnerWidget(size: 14)
+                              : const Icon(Icons.check_rounded),
+                          label: const Text('Send it'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _busy ? null : () => _submit('no'),
+                          icon: const Icon(Icons.close_rounded),
+                          label: const Text('Not now'),
+                        ),
+                      ],
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(
+                        DateFormat('h:mm a').format(widget.message.createdAt),
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: tokens.faint,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AttachmentGrid extends StatelessWidget {
+  const _AttachmentGrid({required this.attachments});
+
+  final List<MessageAttachmentRef> attachments;
+
+  @override
+  Widget build(BuildContext context) {
+    if (attachments.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      children: [
+        for (final attachment in attachments)
+          _AttachmentTile(
+            key: ValueKey(attachment.assetId),
+            attachment: attachment,
+          ),
+      ],
+    );
+  }
+}
+
+class _AttachmentTile extends ConsumerWidget {
+  const _AttachmentTile({required this.attachment, super.key});
+
+  final MessageAttachmentRef attachment;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final tokens = context.maia;
+    return FutureBuilder<MediaDownloadUrl?>(
+      future: ref.read(mediaServiceProvider).downloadUrl(attachment.assetId),
+      builder: (context, snapshot) {
+        final signed = snapshot.data;
+        final url = signed?.thumbUrl ?? signed?.url;
+        final status = signed?.status.isNotEmpty == true
+            ? signed!.status
+            : attachment.status;
+        final isImage = (signed?.kind ?? attachment.kind) == 'image';
+        return InkWell(
+          onTap: signed?.url == null
+              ? null
+              : () => _openAttachment(context, signed!.url, isImage: isImage),
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            width: 112,
+            height: 112,
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              color: tokens.backgroundRaised,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: tokens.border),
+            ),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                if (url != null && isImage)
+                  Image.network(
+                    url,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) =>
+                        _AttachmentPlaceholder(
+                          label: 'unavailable',
+                          icon: Icons.broken_image_outlined,
+                          color: tokens.faint,
+                        ),
+                  )
+                else
+                  _AttachmentPlaceholder(
+                    label: snapshot.hasError
+                        ? 'unavailable'
+                        : snapshot.connectionState == ConnectionState.done
+                        ? attachment.kind
+                        : '...',
+                    icon: isImage
+                        ? Icons.image_outlined
+                        : Icons.play_circle_outline_rounded,
+                    color: tokens.faint,
+                  ),
+                if (status != 'ready')
+                  Positioned(
+                    left: 6,
+                    top: 6,
+                    child: _AttachmentStatusBadge(status: status),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _openAttachment(
+    BuildContext context,
+    String url, {
+    required bool isImage,
+  }) async {
+    if (!isImage) {
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+      return;
+    }
+    if (!context.mounted) {
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      builder: (context) => Dialog.fullscreen(
+        backgroundColor: Colors.black.withValues(alpha: 0.86),
+        child: Stack(
+          children: [
+            Center(
+              child: InteractiveViewer(
+                child: Image.network(url, fit: BoxFit.contain),
+              ),
+            ),
+            Positioned(
+              right: 12,
+              top: 12,
+              child: IconButton.filled(
+                onPressed: () => Navigator.of(context).pop(),
+                icon: const Icon(Icons.close_rounded),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AttachmentPlaceholder extends StatelessWidget {
+  const _AttachmentPlaceholder({
+    required this.label,
+    required this.icon,
+    required this.color,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color, size: 24),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: color,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AttachmentStatusBadge extends StatelessWidget {
+  const _AttachmentStatusBadge({required this.status});
+
+  final String status;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.maia;
+    final failed = status == 'failed';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+      decoration: BoxDecoration(
+        color: failed ? tokens.danger : Colors.black.withValues(alpha: 0.62),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        failed ? 'failed' : 'analyzing',
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: Colors.white,
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+        ),
       ),
     );
   }
@@ -2462,6 +2928,7 @@ class _MemberTimelineViewState extends State<_MemberTimelineView> {
                     messagesById: messagesById,
                     myThreadId: null,
                     onToggleResolved: widget.onToggleResolved,
+                    onConfirmMediaRelay: (body) async {},
                   ),
                 ),
         ),
@@ -2533,6 +3000,7 @@ class _RelayAckPillState extends State<_RelayAckPill> {
     final targetName = extra['target_name']?.toString();
     final sentBody = extra['sent_body']?.toString();
     final audienceSize = extra['audience_size']?.toString();
+    final attachments = messageAttachmentsOf(widget.message);
     final label = broadcast
         ? 'Broadcast to ${audienceSize ?? 'team'}'
         : 'Relayed to ${targetName?.split(' ').first ?? 'teammate'}';
@@ -2554,7 +3022,9 @@ class _RelayAckPillState extends State<_RelayAckPill> {
               backgroundColor: tokens.accent.withValues(alpha: 0.10),
               side: BorderSide(color: tokens.accent.withValues(alpha: 0.32)),
             ),
-            if (_expanded && sentBody != null && sentBody.isNotEmpty)
+            if (_expanded &&
+                ((sentBody != null && sentBody.isNotEmpty) ||
+                    attachments.isNotEmpty))
               Container(
                 margin: const EdgeInsets.only(top: 4),
                 constraints: const BoxConstraints(maxWidth: 520),
@@ -2564,7 +3034,23 @@ class _RelayAckPillState extends State<_RelayAckPill> {
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(color: tokens.border),
                 ),
-                child: Text(sentBody),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (sentBody != null && sentBody.isNotEmpty) Text(sentBody),
+                    if (attachments.isNotEmpty) ...[
+                      if (sentBody != null && sentBody.isNotEmpty)
+                        const SizedBox(height: 8),
+                      _AttachmentGrid(attachments: attachments),
+                    ],
+                  ],
+                ),
+              ),
+            if (!_expanded && attachments.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: _AttachmentGrid(attachments: attachments),
               ),
             Padding(
               padding: const EdgeInsets.only(left: 6, top: 2),
@@ -2618,6 +3104,7 @@ class _InboundRelayPillState extends State<_InboundRelayPill> {
             messagesById: widget.messagesById,
             myThreadId: null,
             onToggleResolved: (messageId, nextResolved) async {},
+            onConfirmMediaRelay: (body) async {},
             forceExpandedRelay: true,
           ),
           if (widget.onRelayReply != null)

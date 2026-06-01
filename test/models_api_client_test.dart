@@ -277,6 +277,76 @@ void main() {
       );
     });
   });
+
+  group('media relay confirmation', () {
+    test('detects relay media confirmation maia_note', () {
+      final message = _message(
+        'confirm-1',
+        type: 'maia_note',
+        body: 'Want me to send the image to Mira?',
+        extra: {'kind': 'relay_media_confirm'},
+      );
+
+      expect(isRelayMediaConfirmMessage(message), isTrue);
+      expect(shouldRenderChatMessage(message), isTrue);
+    });
+  });
+
+  group('message attachments', () {
+    test('extracts and renders maia_note attachments', () {
+      final message = _message(
+        'note-1',
+        type: 'maia_note',
+        body: '',
+        extra: {
+          'attachments': [
+            {
+              'asset_id': 'asset-1',
+              'ref': 'image-1',
+              'kind': 'image',
+              'status': 'ready',
+              'mime_type': 'image/png',
+            },
+          ],
+        },
+      );
+
+      final attachments = messageAttachmentsOf(message);
+
+      expect(attachments, hasLength(1));
+      expect(attachments.single.assetId, 'asset-1');
+      expect(attachments.single.ref, 'image-1');
+      expect(attachments.single.kind, 'image');
+      expect(attachments.single.status, 'ready');
+      expect(attachments.single.mimeType, 'image/png');
+      expect(shouldRenderChatMessage(message), isTrue);
+    });
+
+    test('extracts and renders relay_sent attachments', () {
+      final message = _message(
+        'relay-sent-1',
+        type: 'maia_note',
+        body: 'Sent to Mira.',
+        extra: {
+          'kind': 'relay_sent',
+          'target_name': 'Mira Patel',
+          'sent_body': 'Sharing the diagram with you.',
+          'attachments': [
+            {'asset_id': 'asset-2', 'ref': 'video-1', 'kind': 'video'},
+          ],
+        },
+      );
+
+      final attachments = messageAttachmentsOf(message);
+
+      expect(attachments, hasLength(1));
+      expect(attachments.single.assetId, 'asset-2');
+      expect(attachments.single.ref, 'video-1');
+      expect(attachments.single.kind, 'video');
+      expect(attachments.single.status, 'pending');
+      expect(shouldRenderChatMessage(message), isTrue);
+    });
+  });
 }
 
 Map<String, dynamic> _userJson() => {
@@ -317,12 +387,13 @@ String _messageJson(String id, {required String type, required String body}) {
 Message _message(
   String id, {
   required String body,
+  String type = 'user_reply',
   Map<String, dynamic>? extra,
 }) {
   return Message(
     id: id,
     threadId: 'thread-1',
-    type: 'user_reply',
+    type: type,
     body: body,
     tone: null,
     fromUserId: 'user-1',
