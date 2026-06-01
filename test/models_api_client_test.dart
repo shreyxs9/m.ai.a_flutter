@@ -154,6 +154,23 @@ void main() {
   });
 
   group('poll-only chat transport', () {
+    test('parses inference status response shape', () async {
+      final client = ApiClient(
+        dio: _dioWithResponse(
+          statusCode: 200,
+          body: '{"active":true,"session_id":"session-1"}',
+          contentType: Headers.jsonContentType,
+        ),
+      );
+      final service = ThreadService(client);
+
+      final status = await service.getInferenceStatus('thread-1');
+
+      expect(status.active, isTrue);
+      expect(status.sessionId, 'session-1');
+      expect(status.toJson(), {'active': true, 'session_id': 'session-1'});
+    });
+
     test('parses 200 send response with maia_response', () async {
       final client = ApiClient(
         dio: _dioWithResponse(

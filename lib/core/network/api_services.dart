@@ -346,6 +346,15 @@ class ThreadService {
     return response?.map(Message.fromJson).toList(growable: false) ??
         <Message>[];
   }
+
+  Future<InferenceStatus> getInferenceStatus(String threadId) {
+    return client
+        .get(
+          '/threads/${Uri.encodeComponent(threadId)}/inference-status',
+          parse: InferenceStatus.fromJson,
+        )
+        .then((status) => status ?? const InferenceStatus(active: false));
+  }
 }
 
 class MessageService {
@@ -550,15 +559,6 @@ class ChatTransportService {
           ? null
           : Message.fromJson(data['maia_response']),
     );
-  }
-
-  Future<InferenceStatus> getInferenceStatus(String threadId) {
-    return client
-        .get(
-          '/threads/${Uri.encodeComponent(threadId)}/inference-status',
-          parse: InferenceStatus.fromJson,
-        )
-        .then((status) => status ?? const InferenceStatus(active: false));
   }
 
   Map<String, dynamic> _map(Object? value) {

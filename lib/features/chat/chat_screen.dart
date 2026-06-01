@@ -231,7 +231,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         ref
             .read(threadServiceProvider)
             .listMessages(thread.id, limit: _reconcileWindow),
-        ref.read(chatTransportServiceProvider).getInferenceStatus(thread.id),
+        ref.read(threadServiceProvider).getInferenceStatus(thread.id),
       ]);
       if (!mounted || thread.id != _thread?.id) {
         return;
