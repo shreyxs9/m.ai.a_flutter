@@ -93,6 +93,10 @@ final pushServiceProvider = Provider<PushService>((ref) {
   return PushService(ref.watch(apiClientProvider));
 });
 
+final schedulerServiceProvider = Provider<SchedulerService>((ref) {
+  return SchedulerService(ref.watch(apiClientProvider));
+});
+
 final chatTransportServiceProvider = Provider<ChatTransportService>((ref) {
   return ChatTransportService(ref.watch(apiClientProvider));
 });

@@ -49,13 +49,17 @@ class ProjectSettingsSheet extends ConsumerStatefulWidget {
   const ProjectSettingsSheet({
     required this.project,
     required this.isCurrentUserAdmin,
+    required this.canDeleteProject,
     required this.onUpdated,
+    required this.onDeleted,
     super.key,
   });
 
   final ProjectWithMembers project;
   final bool isCurrentUserAdmin;
+  final bool canDeleteProject;
   final FutureOr<void> Function() onUpdated;
+  final VoidCallback onDeleted;
 
   @override
   ConsumerState<ProjectSettingsSheet> createState() =>
@@ -75,6 +79,7 @@ class _ProjectSettingsSheetState extends ConsumerState<ProjectSettingsSheet> {
   String? _memberAction;
   String? _error;
   bool _saved = false;
+  bool _deleting = false;
 
   @override
   void initState() {
@@ -249,6 +254,27 @@ class _ProjectSettingsSheetState extends ConsumerState<ProjectSettingsSheet> {
     ).showSnackBar(const SnackBar(content: Text('Invite code copied.')));
   }
 
+  Future<void> _deleteProject() async {
+    setState(() {
+      _deleting = true;
+      _error = null;
+      _saved = false;
+    });
+    try {
+      await ref.read(projectServiceProvider).deleteProject(widget.project.id);
+      if (mounted) {
+        widget.onDeleted();
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _error = _deleteMessageFor(error);
+          _deleting = false;
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final tokens = context.maia;
@@ -336,11 +362,14 @@ class _ProjectSettingsSheetState extends ConsumerState<ProjectSettingsSheet> {
           project: widget.project,
           nameController: _nameController,
           icon: _icon,
+          canDelete: widget.canDeleteProject,
+          deleting: _deleting,
           onIconChanged: (value) => setState(() => _icon = value),
           onChanged: () => setState(() {
             _saved = false;
             _error = null;
           }),
+          onDelete: _deleteProject,
         ),
         _SettingsTab.schedule => _SchedulePanel(
           checkinTime: _checkinTime,
@@ -443,15 +472,21 @@ class _GeneralPanel extends StatelessWidget {
     required this.project,
     required this.nameController,
     required this.icon,
+    required this.canDelete,
+    required this.deleting,
     required this.onIconChanged,
     required this.onChanged,
+    required this.onDelete,
   });
 
   final ProjectWithMembers project;
   final TextEditingController nameController;
   final String? icon;
+  final bool canDelete;
+  final bool deleting;
   final ValueChanged<String?> onIconChanged;
   final VoidCallback onChanged;
+  final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -475,6 +510,93 @@ class _GeneralPanel extends StatelessWidget {
             selected: icon,
             onChanged: onIconChanged,
           ),
+          if (canDelete) ...[
+            const SizedBox(height: 24),
+            _DangerZone(deleting: deleting, onDelete: onDelete),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _DangerZone extends StatefulWidget {
+  const _DangerZone({required this.deleting, required this.onDelete});
+
+  final bool deleting;
+  final VoidCallback onDelete;
+
+  @override
+  State<_DangerZone> createState() => _DangerZoneState();
+}
+
+class _DangerZoneState extends State<_DangerZone> {
+  bool _confirming = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.maia;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: tokens.danger.withValues(alpha: tokens.isDark ? 0.12 : 0.06),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: tokens.danger.withValues(alpha: 0.36)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Danger zone',
+            style: Theme.of(context).textTheme.labelLarge?.copyWith(
+              color: tokens.danger,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Delete this project. It disappears for everyone, and check-ins and digests stop. Threads and history are retained server-side.',
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: tokens.dim),
+          ),
+          const SizedBox(height: 12),
+          if (!_confirming)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                onPressed: widget.deleting
+                    ? null
+                    : () => setState(() => _confirming = true),
+                icon: const Icon(Icons.delete_outline_rounded),
+                label: const Text('Delete project'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: tokens.danger,
+                  side: BorderSide(color: tokens.danger.withValues(alpha: 0.6)),
+                ),
+              ),
+            )
+          else
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton(
+                  onPressed: widget.deleting ? null : widget.onDelete,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: tokens.danger,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: Text(widget.deleting ? 'Deleting...' : 'Yes, delete'),
+                ),
+                TextButton(
+                  onPressed: widget.deleting
+                      ? null
+                      : () => setState(() => _confirming = false),
+                  child: const Text('Cancel'),
+                ),
+              ],
+            ),
         ],
       ),
     );
@@ -1163,4 +1285,14 @@ String _messageFor(Object error) {
     return error.message;
   }
   return 'Request failed.';
+}
+
+String _deleteMessageFor(Object error) {
+  if (error is ApiException && error.status == 403) {
+    return 'You need to be the project admin or a workspace admin to delete this project.';
+  }
+  if (error is ApiException && error.message.trim().isNotEmpty) {
+    return error.message;
+  }
+  return 'Failed to delete project';
 }

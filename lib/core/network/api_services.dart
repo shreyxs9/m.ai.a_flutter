@@ -299,6 +299,10 @@ class ProjectService {
     );
   }
 
+  Future<void> deleteProject(String projectId) async {
+    await client.delete<Object?>('/projects/${Uri.encodeComponent(projectId)}');
+  }
+
   Future<Project?> archive(String projectId) {
     return client.post(
       '/projects/${Uri.encodeComponent(projectId)}/archive',
@@ -515,6 +519,25 @@ class PushService {
 
   Future<void> deleteToken(String token) async {
     await client.delete<void>('/me/push-tokens/${Uri.encodeComponent(token)}');
+  }
+}
+
+class SchedulerService {
+  const SchedulerService(this.client);
+
+  final ApiClient client;
+
+  Future<void> triggerCheckin(String projectId) async {
+    await client.post<Object?>(
+      '/scheduler/checkin/${Uri.encodeComponent(projectId)}',
+      body: const <String, dynamic>{},
+    );
+  }
+
+  Future<void> triggerTeamSummary(String projectId) async {
+    await client.post<Object?>(
+      '/scheduler/batch/${Uri.encodeComponent(projectId)}',
+    );
   }
 }
 

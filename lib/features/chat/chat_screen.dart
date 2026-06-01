@@ -60,9 +60,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   bool _rightPanelOpen = true;
   bool _didInitialScroll = false;
   bool _broadcastMode = false;
+  bool _triggerCheckinBusy = false;
+  bool _triggerSummaryBusy = false;
   bool _mentionOpen = false;
   InferenceStatus _inferenceStatus = const InferenceStatus(active: false);
   DateTime? _lastPollAt;
+  String? _workspaceRole;
   ({String code, String message})? _pollError;
   int _projectUpdateTick = 0;
   String _mentionQuery = '';
@@ -110,9 +113,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         _hasMoreOlder = false;
         _didInitialScroll = false;
         _broadcastMode = false;
+        _triggerCheckinBusy = false;
+        _triggerSummaryBusy = false;
         _mentionOpen = false;
         _inferenceStatus = const InferenceStatus(active: false);
         _lastPollAt = null;
+        _workspaceRole = null;
         _pollError = null;
         _projectUpdateTick = 0;
         _mentionQuery = '';
@@ -162,6 +168,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       if (project == null || thread == null) {
         throw const ApiException(null, 'Project chat could not be loaded.');
       }
+      final workspaceRole = await _loadWorkspaceRole(project.tenantId);
 
       final messages = await ref
           .read(threadServiceProvider)
@@ -176,6 +183,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         _teamStatus = teamStatus;
         _messages = _ordered(_merge(const <Message>[], messages));
         _hasMoreOlder = messages.length >= _pageSize;
+        _workspaceRole = workspaceRole;
         _loading = false;
         _error = null;
       });
@@ -190,6 +198,26 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         _error = _messageFor(error);
       });
     }
+  }
+
+  Future<String?> _loadWorkspaceRole(String tenantId) async {
+    final auth = ref.read(authControllerProvider).asData?.value;
+    final userId = auth?.user?.id;
+    if (userId == null || tenantId.isEmpty) {
+      return null;
+    }
+    try {
+      final members = await ref.read(userServiceProvider).tenantMembers();
+      for (final member in members) {
+        if (member.tenantId == tenantId && member.userId == userId) {
+          return member.role.toLowerCase();
+        }
+      }
+    } catch (_) {
+      // The backend still enforces trigger permissions; missing role data only
+      // affects whether Flutter can optimistically show the Trigger menu.
+    }
+    return null;
   }
 
   void _startPolling(String threadId, {bool immediate = false}) {
@@ -453,6 +481,79 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     } finally {
       if (mounted) {
         setState(() => _isSending = false);
+        _composerFocus.requestFocus();
+      }
+    }
+  }
+
+  Future<void> _triggerCheckin() async {
+    final project = _project;
+    if (project == null || _triggerCheckinBusy) {
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: !_triggerCheckinBusy,
+      builder: (context) => _TriggerConfirmDialog(
+        title: 'Trigger on-demand check-in?',
+        body:
+            'Maia will ask check-in-enabled project members for an update now.',
+        actionLabel: 'Trigger check-in',
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      _composerFocus.requestFocus();
+      return;
+    }
+
+    setState(() => _triggerCheckinBusy = true);
+    try {
+      await ref.read(schedulerServiceProvider).triggerCheckin(project.id);
+      if (!mounted || project.id != widget.projectId) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('On-demand check-in started.')),
+      );
+      unawaited(_pollThread(immediate: true));
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_schedulerMessageFor(error))));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _triggerCheckinBusy = false);
+        _composerFocus.requestFocus();
+      }
+    }
+  }
+
+  Future<void> _triggerTeamSummary() async {
+    final project = _project;
+    if (project == null || _triggerSummaryBusy) {
+      return;
+    }
+    setState(() => _triggerSummaryBusy = true);
+    try {
+      await ref.read(schedulerServiceProvider).triggerTeamSummary(project.id);
+      if (!mounted || project.id != widget.projectId) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Team summary generation started.')),
+      );
+      unawaited(_pollThread(immediate: true));
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_schedulerMessageFor(error))));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _triggerSummaryBusy = false);
         _composerFocus.requestFocus();
       }
     }
@@ -729,13 +830,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     final auth = ref.watch(authControllerProvider).asData?.value;
     final currentUser = auth?.user;
     final currentUserId = currentUser?.id;
-    final isAdmin =
-        currentUser?.isSuperAdmin == true ||
-        project.members.any(
-          (member) =>
-              member.userId == currentUserId &&
-              member.role.toLowerCase() == 'admin',
-        );
+    final isProjectAdmin = project.members.any(
+      (member) =>
+          member.userId == currentUserId &&
+          member.role.toLowerCase() == 'admin',
+    );
+    final isWorkspaceAdmin =
+        _workspaceRole == 'admin' || _workspaceRole == 'super_admin';
+    final isAdmin = currentUser?.isSuperAdmin == true || isProjectAdmin;
+    final canDeleteProject =
+        currentUser?.isSuperAdmin == true || isProjectAdmin || isWorkspaceAdmin;
+    final canTrigger =
+        currentUser?.isSuperAdmin == true || isProjectAdmin || isWorkspaceAdmin;
 
     return Scaffold(
       backgroundColor: tokens.background,
@@ -753,13 +859,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                         project: project,
                         rightPanelOpen: _rightPanelOpen,
                         showPanelToggle: desktop,
-                        isAdmin: isAdmin,
+                        canOpenSettings: isAdmin || canDeleteProject,
                         onBack: () => context.go('/'),
                         onTogglePanel: () {
                           setState(() => _rightPanelOpen = !_rightPanelOpen);
                         },
-                        onSettings: () =>
-                            _showProjectSettings(project, isAdmin),
+                        onSettings: () => _showProjectSettings(
+                          project,
+                          isAdmin,
+                          canDeleteProject,
+                        ),
                       ),
                       Expanded(
                         child: _activeMemberId == null
@@ -791,6 +900,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                           mentionOpen: _mentionOpen,
                           mentionIndex: _mentionIndex,
                           mentionCandidates: _mentionCandidates,
+                          canTrigger: canTrigger,
+                          triggerCheckinBusy: _triggerCheckinBusy,
+                          triggerSummaryBusy: _triggerSummaryBusy,
                           onChanged: _handleComposerChanged,
                           onPickMention: _insertMention,
                           onToggleBroadcast: () {
@@ -801,6 +913,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                               }
                             });
                           },
+                          onTriggerCheckin: _triggerCheckin,
+                          onTriggerTeamSummary: _triggerTeamSummary,
                           onSend: _send,
                         ),
                     ],
@@ -971,6 +1085,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   Future<void> _showProjectSettings(
     ProjectWithMembers project,
     bool isAdmin,
+    bool canDeleteProject,
   ) async {
     await showModalBottomSheet<void>(
       context: context,
@@ -980,7 +1095,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       builder: (context) => ProjectSettingsSheet(
         project: project,
         isCurrentUserAdmin: isAdmin,
+        canDeleteProject: canDeleteProject,
         onUpdated: _refreshProject,
+        onDeleted: () {
+          Navigator.pop(context);
+          this.context.go('/');
+        },
       ),
     );
   }
@@ -1075,7 +1195,7 @@ class _ProjectHeader extends StatelessWidget {
     required this.project,
     required this.rightPanelOpen,
     required this.showPanelToggle,
-    required this.isAdmin,
+    required this.canOpenSettings,
     required this.onBack,
     required this.onTogglePanel,
     required this.onSettings,
@@ -1084,7 +1204,7 @@ class _ProjectHeader extends StatelessWidget {
   final ProjectWithMembers project;
   final bool rightPanelOpen;
   final bool showPanelToggle;
-  final bool isAdmin;
+  final bool canOpenSettings;
   final VoidCallback onBack;
   final VoidCallback onTogglePanel;
   final VoidCallback onSettings;
@@ -1145,7 +1265,7 @@ class _ProjectHeader extends StatelessWidget {
                     : Icons.view_sidebar_outlined,
               ),
             ),
-          if (isAdmin)
+          if (canOpenSettings)
             IconButton(
               tooltip: 'Project settings',
               onPressed: onSettings,
@@ -1525,9 +1645,14 @@ class _Composer extends StatelessWidget {
     required this.mentionOpen,
     required this.mentionIndex,
     required this.mentionCandidates,
+    required this.canTrigger,
+    required this.triggerCheckinBusy,
+    required this.triggerSummaryBusy,
     required this.onChanged,
     required this.onPickMention,
     required this.onToggleBroadcast,
+    required this.onTriggerCheckin,
+    required this.onTriggerTeamSummary,
     required this.onSend,
   });
 
@@ -1538,9 +1663,14 @@ class _Composer extends StatelessWidget {
   final bool mentionOpen;
   final int mentionIndex;
   final List<ProjectMember> mentionCandidates;
+  final bool canTrigger;
+  final bool triggerCheckinBusy;
+  final bool triggerSummaryBusy;
   final ValueChanged<String> onChanged;
   final ValueChanged<ProjectMember> onPickMention;
   final VoidCallback onToggleBroadcast;
+  final VoidCallback onTriggerCheckin;
+  final VoidCallback onTriggerTeamSummary;
   final VoidCallback onSend;
 
   @override
@@ -1603,6 +1733,21 @@ class _Composer extends StatelessWidget {
                             onTap: () => onPickMention(entry.$2),
                           ),
                       ],
+                    ),
+                  ),
+                ),
+              if (canTrigger && !broadcastMode)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: _TriggerMenuButton(
+                      disabled:
+                          sending || triggerCheckinBusy || triggerSummaryBusy,
+                      triggerCheckinBusy: triggerCheckinBusy,
+                      triggerSummaryBusy: triggerSummaryBusy,
+                      onTriggerCheckin: onTriggerCheckin,
+                      onTriggerTeamSummary: onTriggerTeamSummary,
                     ),
                   ),
                 ),
@@ -1866,6 +2011,174 @@ class _RightPanel extends StatelessWidget {
           ),
         )
         .toList(growable: false);
+  }
+}
+
+class _TriggerMenuButton extends StatelessWidget {
+  const _TriggerMenuButton({
+    required this.disabled,
+    required this.triggerCheckinBusy,
+    required this.triggerSummaryBusy,
+    required this.onTriggerCheckin,
+    required this.onTriggerTeamSummary,
+  });
+
+  final bool disabled;
+  final bool triggerCheckinBusy;
+  final bool triggerSummaryBusy;
+  final VoidCallback onTriggerCheckin;
+  final VoidCallback onTriggerTeamSummary;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.maia;
+    final busy = triggerCheckinBusy || triggerSummaryBusy;
+    return PopupMenuButton<_TriggerAction>(
+      enabled: !disabled,
+      tooltip: 'Trigger',
+      position: PopupMenuPosition.over,
+      onSelected: (action) {
+        switch (action) {
+          case _TriggerAction.checkin:
+            onTriggerCheckin();
+          case _TriggerAction.teamSummary:
+            onTriggerTeamSummary();
+        }
+      },
+      itemBuilder: (context) => [
+        PopupMenuItem<_TriggerAction>(
+          value: _TriggerAction.checkin,
+          enabled: !triggerCheckinBusy,
+          child: _TriggerMenuItem(
+            icon: Icons.flash_on_rounded,
+            title: triggerCheckinBusy
+                ? 'Starting check-in...'
+                : 'On-demand check-in',
+            subtitle: 'Ask check-in-enabled members now',
+          ),
+        ),
+        PopupMenuItem<_TriggerAction>(
+          value: _TriggerAction.teamSummary,
+          enabled: !triggerSummaryBusy,
+          child: _TriggerMenuItem(
+            icon: Icons.summarize_outlined,
+            title: triggerSummaryBusy ? 'Starting summary...' : 'Team summary',
+            subtitle: 'Generate summaries and team digest',
+          ),
+        ),
+      ],
+      child: Opacity(
+        opacity: disabled ? 0.45 : 1,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+          decoration: BoxDecoration(
+            color: tokens.backgroundCard,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: tokens.border),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (busy)
+                const SpinnerWidget(size: 14)
+              else
+                Icon(Icons.bolt_rounded, size: 15, color: tokens.dim),
+              const SizedBox(width: 6),
+              Text(
+                'Trigger',
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: tokens.dim,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(width: 2),
+              Icon(Icons.expand_less_rounded, size: 16, color: tokens.faint),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+enum _TriggerAction { checkin, teamSummary }
+
+class _TriggerMenuItem extends StatelessWidget {
+  const _TriggerMenuItem({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.maia;
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: tokens.accent),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: tokens.text,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(
+                  context,
+                ).textTheme.labelSmall?.copyWith(color: tokens.faint),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _TriggerConfirmDialog extends StatelessWidget {
+  const _TriggerConfirmDialog({
+    required this.title,
+    required this.body,
+    required this.actionLabel,
+  });
+
+  final String title;
+  final String body;
+  final String actionLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(title),
+      content: Text(body),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(true),
+          child: Text(actionLabel),
+        ),
+      ],
+    );
   }
 }
 
@@ -3150,6 +3463,16 @@ String _messageFor(Object error) {
     return error.message;
   }
   return 'Failed to load project chat.';
+}
+
+String _schedulerMessageFor(Object error) {
+  if (error is ApiException && error.status == 403) {
+    return 'Project admin or workspace admin access required.';
+  }
+  if (error is ApiException && error.message.isNotEmpty) {
+    return error.message;
+  }
+  return 'Could not start trigger.';
 }
 
 const _avatarColors = <Color>[
