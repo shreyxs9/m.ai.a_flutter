@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:app_links/app_links.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -104,12 +105,14 @@ class AuthController extends AsyncNotifier<AuthState> {
   late final ApiSessionStore _sessionStore;
   late final AuthService _authService;
   late final TenantService _tenantService;
+  StreamSubscription<Uri>? _deepLinkSubscription;
 
   @override
   Future<AuthState> build() async {
     _sessionStore = ref.watch(apiSessionStoreProvider);
     _authService = ref.watch(authServiceProvider);
     _tenantService = ref.watch(tenantServiceProvider);
+    _listenForAuthDeepLinks();
 
     return _bootstrap();
   }
@@ -233,15 +236,8 @@ class AuthController extends AsyncNotifier<AuthState> {
 
   Future<void> _captureTokenFromUrl() async {
     final uri = currentBrowserUri();
-    final token = uri.queryParameters['token'];
-    if (token == null || token.isEmpty) {
-      return;
-    }
-
-    await _sessionStore.setToken(token);
-
-    final replayed = await _replayPendingInvite();
-    if (!replayed) {
+    final browserCapture = await _captureTokenFromUri(uri);
+    if (browserCapture.captured && !browserCapture.replayedInvite) {
       final cleanUri = uri.replace(queryParameters: <String, String>{});
       final cleanPath = cleanUri.hasFragment && cleanUri.fragment.isNotEmpty
           ? '${cleanUri.path}#${cleanUri.fragment}'
@@ -249,7 +245,57 @@ class AuthController extends AsyncNotifier<AuthState> {
           ? '/'
           : cleanUri.path;
       replaceBrowserUrl(cleanPath);
+      return;
     }
+    if (browserCapture.captured) {
+      return;
+    }
+
+    if (kIsWeb) {
+      return;
+    }
+
+    final initialLink = await AppLinks().getInitialLink().timeout(
+      const Duration(milliseconds: 250),
+      onTimeout: () => null,
+    );
+    if (initialLink != null) {
+      await _captureTokenFromUri(initialLink);
+    }
+  }
+
+  Future<_TokenCaptureResult> _captureTokenFromUri(Uri uri) async {
+    final token = uri.queryParameters['token'];
+    if (token == null || token.isEmpty) {
+      return const _TokenCaptureResult(captured: false);
+    }
+
+    await _sessionStore.setToken(token);
+
+    final replayed = await _replayPendingInvite();
+    return _TokenCaptureResult(captured: true, replayedInvite: replayed);
+  }
+
+  void _listenForAuthDeepLinks() {
+    if (kIsWeb || _deepLinkSubscription != null) {
+      return;
+    }
+    final appLinks = AppLinks();
+    _deepLinkSubscription = appLinks.uriLinkStream.listen((uri) {
+      unawaited(_handleAuthDeepLink(uri));
+    });
+    ref.onDispose(() {
+      unawaited(_deepLinkSubscription?.cancel());
+      _deepLinkSubscription = null;
+    });
+  }
+
+  Future<void> _handleAuthDeepLink(Uri uri) async {
+    final result = await _captureTokenFromUri(uri);
+    if (!result.captured) {
+      return;
+    }
+    await reload();
   }
 
   Future<bool> _replayPendingInvite() async {
@@ -298,4 +344,14 @@ class AuthController extends AsyncNotifier<AuthState> {
     }
     return 'Session expired. Please sign in again.';
   }
+}
+
+class _TokenCaptureResult {
+  const _TokenCaptureResult({
+    required this.captured,
+    this.replayedInvite = false,
+  });
+
+  final bool captured;
+  final bool replayedInvite;
 }

@@ -27,7 +27,7 @@ Limitations:
 - The Firebase Messaging worker uses its own
   `/firebase-cloud-messaging-push-scope` scope so it does not replace Flutter's
   generated app service worker.
-- iOS Safari can receive web push only after the site is installed to the home
+  - iOS Safari can receive web push only after the site is installed to the home
   screen as a PWA.
 - If Firebase config or the VAPID key is missing, the banner is suppressed as
   unsupported and no token is requested.

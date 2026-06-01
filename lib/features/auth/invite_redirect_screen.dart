@@ -42,7 +42,7 @@ class _InviteRedirectScreenState extends ConsumerState<InviteRedirectScreen> {
     final auth = ref.read(authControllerProvider).asData?.value;
     if (auth?.isAuthenticated != true) {
       await ref.read(apiSessionStoreProvider).setPendingInvite(normalized);
-      navigateBrowserTo(ApiConfig.defaultConfig.loginRedirectUrl);
+      navigateBrowserTo(ApiConfig.defaultConfig.loginRedirectUrl());
       if (mounted) {
         context.go('/login');
       }
@@ -50,15 +50,16 @@ class _InviteRedirectScreenState extends ConsumerState<InviteRedirectScreen> {
     }
 
     try {
-      final result =
-          await ref.read(projectServiceProvider).joinByInvite(normalized);
+      final result = await ref
+          .read(projectServiceProvider)
+          .joinByInvite(normalized);
       if (result == null) {
         throw const ApiException(null, "Couldn't redeem invite.");
       }
 
-      await ref.read(authControllerProvider.notifier).selectTenantId(
-            result.tenantId,
-          );
+      await ref
+          .read(authControllerProvider.notifier)
+          .selectTenantId(result.tenantId);
       await ref.read(authControllerProvider.notifier).refreshTenants();
 
       if (!mounted) {

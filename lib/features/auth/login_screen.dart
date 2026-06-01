@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -118,7 +119,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       _error = null;
     });
 
-    final url = ApiConfig.defaultConfig.loginRedirectUrl;
+    final config = ApiConfig.defaultConfig;
+    final url = config.loginRedirectUrl(
+      redirectUri: kIsWeb ? null : config.mobileRedirectUri,
+    );
     try {
       navigateBrowserTo(url);
       final uri = Uri.tryParse(url);

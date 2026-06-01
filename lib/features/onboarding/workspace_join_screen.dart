@@ -69,7 +69,7 @@ class _WorkspaceJoinScreenState extends ConsumerState<WorkspaceJoinScreen> {
       await ref
           .read(apiSessionStoreProvider)
           .setPendingWorkspaceInvite(_normalized);
-      navigateBrowserTo(ApiConfig.defaultConfig.loginRedirectUrl);
+      navigateBrowserTo(ApiConfig.defaultConfig.loginRedirectUrl());
       if (mounted) {
         context.go('/login');
       }
@@ -77,8 +77,9 @@ class _WorkspaceJoinScreenState extends ConsumerState<WorkspaceJoinScreen> {
     }
 
     try {
-      final preview =
-          await ref.read(tenantServiceProvider).previewByInvite(_normalized);
+      final preview = await ref
+          .read(tenantServiceProvider)
+          .previewByInvite(_normalized);
       if (!mounted) {
         return;
       }
@@ -110,18 +111,18 @@ class _WorkspaceJoinScreenState extends ConsumerState<WorkspaceJoinScreen> {
     });
 
     try {
-      final result = await ref.read(tenantServiceProvider).joinByInvite(
-            _normalized,
-          );
+      final result = await ref
+          .read(tenantServiceProvider)
+          .joinByInvite(_normalized);
       if (result == null) {
         throw const ApiException(null, "Couldn't join workspace.");
       }
       if (result.joined) {
         await ref.read(authServiceProvider).updateTitle(_role);
       }
-      await ref.read(authControllerProvider.notifier).selectTenantId(
-            result.tenantId,
-          );
+      await ref
+          .read(authControllerProvider.notifier)
+          .selectTenantId(result.tenantId);
       await ref.read(authControllerProvider.notifier).refreshTenants();
       if (mounted) {
         context.go('/');
@@ -142,9 +143,7 @@ class _WorkspaceJoinScreenState extends ConsumerState<WorkspaceJoinScreen> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     if (_error != null && _workspace == null) {
@@ -186,7 +185,9 @@ class _WorkspaceJoinScreenState extends ConsumerState<WorkspaceJoinScreen> {
                 const Icon(Icons.apartment_rounded, size: 42),
                 const SizedBox(height: 16),
                 Text(
-                  alreadyMember ? "You're already in" : "You've been invited to",
+                  alreadyMember
+                      ? "You're already in"
+                      : "You've been invited to",
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.labelLarge,
                 ),
