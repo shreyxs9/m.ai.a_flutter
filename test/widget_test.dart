@@ -24,6 +24,11 @@ void main() {
     expect(find.text('Async check-ins + daily digest'), findsOneWidget);
     expect(find.text('Real product surfaces'), findsOneWidget);
     expect(find.text('Three steps. Then it runs without you.'), findsOneWidget);
-    expect(find.text('Continue with Google'), findsOneWidget);
+    expect(find.text("Get started - it's free"), findsOneWidget);
+    expect(find.text('Cross-functional examples'), findsOneWidget);
+    expect(
+      find.text('More than a check-in. A whole calm workflow.'),
+      findsOneWidget,
+    );
   });
 }

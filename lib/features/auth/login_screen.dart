@@ -62,6 +62,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         onLogin: _loading ? null : _launchLogin,
                       ),
                       const SizedBox(height: 28),
+                      const _LandingFooter(),
+                      const SizedBox(height: 28),
                     ],
                   ),
                 ),
@@ -175,7 +177,7 @@ class _LandingHero extends StatelessWidget {
         ),
         const SizedBox(height: 18),
         Text(
-          "Maia checks in with each teammate on your cadence, turns the day's progress into one clear digest, and surfaces blockers before they cost you the week.",
+          "Maia checks in with each teammate on your cadence, turns the day's progress into one clear digest, and surfaces blockers before they cost you the week so standups start with everyone already on the same page.",
           style: textTheme.bodyLarge?.copyWith(
             color: tokens.dim,
             height: 1.55,
@@ -210,7 +212,9 @@ class _LandingHero extends StatelessWidget {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.login_rounded, size: 18),
-              label: Text(loading ? 'Opening sign in' : 'Continue with Google'),
+              label: Text(
+                loading ? 'Opening sign in' : "Get started - it's free",
+              ),
             ),
             OutlinedButton.icon(
               onPressed: () => _scrollToHowItWorks(context),
@@ -289,19 +293,19 @@ class _FlowSection extends StatelessWidget {
         number: '01',
         title: 'Maia checks in',
         body:
-            "A short, friendly message at your team's chosen time: async, lightweight, and easy to answer.",
+            "A short, friendly message at your team's chosen time: async, on their schedule, and focused on what moved.",
       ),
       const _StepCard(
         number: '02',
         title: 'You get the digest',
         body:
-            "Every day, one clean rollup lands: what shipped, what's in flight, and what needs attention.",
+            "Every day, one clean rollup lands: what shipped, what's in flight, and exactly what needs your eyes.",
       ),
       const _StepCard(
         number: '03',
         title: 'Blockers get unblocked',
         body:
-            "Maia spots stuck work and routes the right context before it becomes next week's problem.",
+            "Maia spots who's stuck and routes the right context to whoever can help before it becomes next week's problem.",
       ),
     ];
 
@@ -342,39 +346,39 @@ class _ProductSurfacesSection extends StatelessWidget {
     final desktop = MediaQuery.sizeOf(context).width >= 920;
     return _SectionShell(
       kicker: 'Real product surfaces',
-      title: 'More than a check-in. A calm workflow in the project thread.',
+      title: 'More than a check-in. A whole calm workflow.',
       body:
-          'These are the surfaces Maia drops into your team workspace: check-ins, digest, relays, broadcasts, and living project context.',
+          'These are the real surfaces Maia drops into your thread whether your team runs marketing campaigns, sales pipelines, client work, PR launches, or product. Same calm workflow, any function.',
       child: GridView.count(
         crossAxisCount: desktop ? 2 : 1,
-        childAspectRatio: desktop ? 1.24 : 1.04,
+        childAspectRatio: desktop ? 1.22 : 0.92,
         crossAxisSpacing: 16,
         mainAxisSpacing: 16,
         physics: const NeverScrollableScrollPhysics(),
         shrinkWrap: true,
         children: const [
           _SurfaceTile(
-            title: 'Daily pulse',
+            title: 'The daily pulse',
             body:
-                "A red, yellow, or green read on what shipped, what's at risk, and who's gone quiet.",
+                "One project-wide read every day with a red, yellow, or green call: what shipped, what's at risk, and who's gone quiet.",
             child: _DailyPulseMini(),
           ),
           _SurfaceTile(
-            title: 'Relays',
+            title: 'Relays - ask without the ping-storm',
             body:
                 'Mention a teammate and Maia rephrases the ask, delivers it, and threads the reply back.',
             child: _RelayMini(),
           ),
           _SurfaceTile(
-            title: 'Broadcasts',
+            title: 'Broadcasts to everyone',
             body:
-                "One project-wide message, softened and delivered without turning into a noisy channel blast.",
+                "One project-wide message, politely rephrased and delivered to each person's thread, never a noisy channel blast.",
             child: _BroadcastMini(),
           ),
           _SurfaceTile(
-            title: 'Goals and state',
+            title: 'Goals and state, always current',
             body:
-                'The north star stays pinned while project state evolves from daily team signal.',
+                'Your north star stays pinned, and Maia keeps a living read of where the project actually is from every check-in.',
             child: _GoalsStateMini(),
           ),
         ],
@@ -453,7 +457,7 @@ class _ClosingSection extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           Text(
-            'Spin up your first project and run a check-in in minutes.',
+            'Free to start. Spin up your first project and run a check-in in under five minutes. No credit card, no setup call.',
             textAlign: TextAlign.center,
             style: Theme.of(
               context,
@@ -471,6 +475,66 @@ class _ClosingSection extends StatelessWidget {
             label: Text(loading ? 'Opening sign in' : 'Get started'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _LandingFooter extends StatelessWidget {
+  const _LandingFooter();
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.maia;
+    final year = DateTime.now().year;
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 18),
+      decoration: BoxDecoration(
+        border: Border(top: BorderSide(color: tokens.border)),
+      ),
+      child: Flex(
+        direction: MediaQuery.sizeOf(context).width >= 640
+            ? Axis.horizontal
+            : Axis.vertical,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Text(
+            '(c) $year Cydratech Private Limited',
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: tokens.faint, height: 1.4),
+          ),
+          const SizedBox(width: 16, height: 12),
+          Wrap(
+            spacing: 18,
+            runSpacing: 8,
+            alignment: WrapAlignment.center,
+            children: const [
+              _FooterLink(label: 'Privacy'),
+              _FooterLink(label: 'Terms'),
+              _FooterLink(label: 'Contact'),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FooterLink extends StatelessWidget {
+  const _FooterLink({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.maia;
+    return Text(
+      label,
+      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+        color: tokens.dim,
+        fontWeight: FontWeight.w500,
       ),
     );
   }
@@ -775,12 +839,19 @@ class _DigestSurface extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 10),
+          _DigestLine(color: tokens.success, text: '2 done'),
+          _DigestLine(color: tokens.danger, text: '2 blockers'),
+          _DigestLine(color: tokens.accent, text: '1 next'),
+          const SizedBox(height: 8),
           _DigestLine(
             color: tokens.success,
-            text: 'Done: launch copy approved',
+            text: 'Done: newsletter drafted and Q3 ad copy approved',
           ),
-          _DigestLine(color: tokens.danger, text: 'Blocked: final creative'),
-          _DigestLine(color: tokens.accent, text: 'Next: schedule press posts'),
+          _DigestLine(
+            color: tokens.danger,
+            text: 'Blocked: final hero creative still pending from design',
+          ),
+          _DigestLine(color: tokens.accent, text: 'Next: brief the PR agency'),
         ],
       ),
     );
@@ -807,9 +878,11 @@ class _DailyPulseMini extends StatelessWidget {
         children: [
           _RiskPill(label: 'yellow', color: tokens.accent),
           const SizedBox(height: 10),
-          const _MiniBullet('4 of 5 checked in: strong launch pace.'),
-          const _MiniBullet('Shipped: newsletter and press list locked.'),
-          const _MiniBullet('Watch: hero creative pending from design.'),
+          const _MiniBullet('4 of 5 on the launch checked in.'),
+          const _MiniBullet(
+            'Shipped: newsletter scheduled, press list locked.',
+          ),
+          const _MiniBullet('Watch: hero creative routed to Devon.'),
         ],
       ),
     );
@@ -833,10 +906,10 @@ class _RelayMini extends StatelessWidget {
           decoration: BoxDecoration(
             color: tokens.backgroundCard,
             borderRadius: tokens.borderRadius,
-            border: Border.all(color: tokens.accent, style: BorderStyle.solid),
+            border: Border.all(color: tokens.accent),
           ),
           child: Text(
-            'Can you pull the latest pricing deck before the Acme renewal call?',
+            'When you get a sec, can you pull the latest pricing deck? The Acme renewal call is at 3.',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
               color: tokens.dim,
               fontStyle: FontStyle.italic,
@@ -868,7 +941,7 @@ class _BroadcastMini extends StatelessWidget {
           padding: const EdgeInsets.all(13),
           decoration: tokens.surfaceDecoration(),
           child: Text(
-            'Embargo lifts 9am ET. Please push the launch posts then.',
+            'Heads up team: embargo lifts 9am ET. Please push the launch posts then.',
             style: Theme.of(
               context,
             ).textTheme.bodySmall?.copyWith(color: tokens.text, height: 1.45),
@@ -906,11 +979,13 @@ class _GoalsStateMini extends StatelessWidget {
           const _SurfaceEyebrow(icon: Icons.timeline_outlined, label: 'state'),
           const SizedBox(height: 8),
           Text(
-            'Mid-launch. Press outreach is moving; legal sign-off may slip social rollout.',
+            'Mid-launch on the rebrand. Press outreach is underway; legal sign-off on campaign claims may slip social rollout.',
             style: Theme.of(
               context,
             ).textTheme.bodySmall?.copyWith(color: tokens.dim, height: 1.45),
           ),
+          const SizedBox(height: 10),
+          _RiskPill(label: 'auto-evolved', color: tokens.faint),
         ],
       ),
     );
