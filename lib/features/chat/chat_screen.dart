@@ -31,6 +31,8 @@ const _messageTypes = <String>{
   'maia_digest',
 };
 
+enum _MessagePagingMode { latestWindow, ascendingOffset }
+
 final _mediaDownloadUrlProvider =
     FutureProvider.family<MediaDownloadUrl?, String>(
       (ref, assetId) => ref.watch(mediaServiceProvider).downloadUrl(assetId),
@@ -128,6 +130,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   DateTime? _lastPollAt;
   String? _workspaceRole;
   ({String code, String message})? _pollError;
+  _MessagePagingMode _messagePagingMode = _MessagePagingMode.latestWindow;
+  int? _nextOlderOffset;
   int _projectUpdateTick = 0;
   String _mentionQuery = '';
   int _mentionStart = -1;
@@ -181,6 +185,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         _lastPollAt = null;
         _workspaceRole = null;
         _pollError = null;
+        _messagePagingMode = _MessagePagingMode.latestWindow;
+        _nextOlderOffset = null;
         _projectUpdateTick = 0;
         _mentionQuery = '';
         _mentionStart = -1;
@@ -231,9 +237,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       }
       final workspaceRole = await _loadWorkspaceRole(project.tenantId);
 
-      final messages = await ref
-          .read(threadServiceProvider)
-          .listMessages(thread.id, limit: _pageSize);
+      final initialMessages = await _loadInitialMessages(thread.id);
       if (!mounted || projectId != widget.projectId) {
         return;
       }
@@ -242,8 +246,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         _project = project;
         _thread = thread;
         _teamStatus = teamStatus;
-        _messages = _ordered(_merge(const <Message>[], messages));
-        _hasMoreOlder = messages.length >= _pageSize;
+        _messages = _ordered(
+          _merge(const <Message>[], initialMessages.messages),
+        );
+        _hasMoreOlder = initialMessages.hasMoreOlder;
+        _messagePagingMode = initialMessages.pagingMode;
+        _nextOlderOffset = initialMessages.nextOlderOffset;
         _workspaceRole = workspaceRole;
         _loading = false;
         _error = null;
@@ -259,6 +267,64 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         _error = _messageFor(error);
       });
     }
+  }
+
+  Future<
+    ({
+      List<Message> messages,
+      bool hasMoreOlder,
+      _MessagePagingMode pagingMode,
+      int? nextOlderOffset,
+    })
+  >
+  _loadInitialMessages(String threadId) async {
+    final service = ref.read(threadServiceProvider);
+    final first = await service.listMessages(threadId, limit: _pageSize);
+    if (first.length < _pageSize) {
+      return (
+        messages: first,
+        hasMoreOlder: false,
+        pagingMode: _MessagePagingMode.latestWindow,
+        nextOlderOffset: null,
+      );
+    }
+
+    final probe = await service.listMessages(
+      threadId,
+      limit: _pageSize,
+      offset: first.length,
+    );
+    if (probe.isEmpty || !_pageIsNewerThan(first, probe)) {
+      return (
+        messages: first,
+        hasMoreOlder: true,
+        pagingMode: _MessagePagingMode.latestWindow,
+        nextOlderOffset: first.length,
+      );
+    }
+
+    var latest = probe;
+    var latestOffset = first.length;
+    while (latest.length >= _pageSize) {
+      final nextOffset = latestOffset + latest.length;
+      final next = await service.listMessages(
+        threadId,
+        limit: _pageSize,
+        offset: nextOffset,
+      );
+      if (next.isEmpty || !_pageIsNewerThan(latest, next)) {
+        break;
+      }
+      latest = next;
+      latestOffset = nextOffset;
+    }
+
+    return (
+      messages: latest,
+      hasMoreOlder: latestOffset > 0,
+      pagingMode: _MessagePagingMode.ascendingOffset,
+      nextOlderOffset: _previousAscendingOffset(latestOffset),
+    );
   }
 
   Future<String?> _loadWorkspaceRole(String tenantId) async {
@@ -393,15 +459,30 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         : 0.0;
 
     try {
+      final offset = _messagePagingMode == _MessagePagingMode.ascendingOffset
+          ? _nextOlderOffset
+          : _messages.length;
+      if (offset == null) {
+        setState(() {
+          _loadingOlder = false;
+          _hasMoreOlder = false;
+        });
+        return;
+      }
       final older = await ref
           .read(threadServiceProvider)
-          .listMessages(thread.id, limit: _pageSize, offset: _messages.length);
+          .listMessages(thread.id, limit: _pageSize, offset: offset);
       if (!mounted || thread.id != _thread?.id) {
         return;
       }
       setState(() {
         _messages = _ordered(_merge(_messages, older));
-        _hasMoreOlder = older.length >= _pageSize;
+        if (_messagePagingMode == _MessagePagingMode.ascendingOffset) {
+          _nextOlderOffset = _previousAscendingOffset(offset);
+          _hasMoreOlder = older.isNotEmpty && offset > 0;
+        } else {
+          _hasMoreOlder = older.length >= _pageSize;
+        }
       });
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!_scrollController.hasClients) {
@@ -928,22 +1009,42 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
 
   void _scrollToBottomSoon({bool jump = false}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _scrollToBottomNow(jump: jump || !_didInitialScroll);
+      });
+    });
+  }
+
+  void _scrollToBottomNow({required bool jump, int remainingSettles = 3}) {
+    if (!_scrollController.hasClients) {
+      return;
+    }
+    final target = _scrollController.position.maxScrollExtent;
+    if (jump) {
+      _scrollController.jumpTo(target);
+    } else {
+      unawaited(
+        _scrollController.animateTo(
+          target,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        ),
+      );
+    }
+    _didInitialScroll = true;
+    if (remainingSettles <= 0) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollController.hasClients) {
         return;
       }
-      final target = _scrollController.position.maxScrollExtent;
-      if (jump || !_didInitialScroll) {
-        _scrollController.jumpTo(target);
-      } else {
-        unawaited(
-          _scrollController.animateTo(
-            target,
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeOutCubic,
-          ),
-        );
+      final distanceFromBottom =
+          _scrollController.position.maxScrollExtent -
+          _scrollController.position.pixels;
+      if (distanceFromBottom > 1) {
+        _scrollToBottomNow(jump: true, remainingSettles: remainingSettles - 1);
       }
-      _didInitialScroll = true;
     });
   }
 
@@ -2265,6 +2366,9 @@ class _Composer extends StatelessWidget {
     final composerRadius = BorderRadius.circular(
       tokens.themeKey == MaiaThemeKey.brutalist ? 0 : 18,
     );
+    final containerRadius = BorderRadius.vertical(
+      top: Radius.circular(tokens.themeKey == MaiaThemeKey.brutalist ? 0 : 18),
+    );
     return AnimatedPadding(
       duration: const Duration(milliseconds: 180),
       curve: Curves.easeOutCubic,
@@ -2272,151 +2376,155 @@ class _Composer extends StatelessWidget {
       child: SafeArea(
         top: false,
         minimum: const EdgeInsets.only(bottom: 8),
-        child: Container(
-          decoration: BoxDecoration(
-            color: tokens.backgroundRaised,
-            border: Border(top: BorderSide(color: tokens.border)),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (mentionOpen && mentionCandidates.isNotEmpty)
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Container(
-                    margin: const EdgeInsets.fromLTRB(14, 10, 14, 0),
-                    constraints: const BoxConstraints(maxWidth: 360),
-                    decoration: tokens.surfaceDecoration(withShadow: true),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        for (final entry in mentionCandidates.indexed)
-                          ListTile(
-                            dense: true,
-                            visualDensity: VisualDensity.compact,
-                            selected: entry.$1 == mentionIndex,
-                            selectedTileColor: tokens.accentSoft,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(
-                                tokens.radius.clamp(0, 10),
+        child: ClipRRect(
+          borderRadius: containerRadius,
+          child: Container(
+            decoration: BoxDecoration(
+              color: tokens.backgroundRaised,
+              borderRadius: containerRadius,
+              border: Border(top: BorderSide(color: tokens.border)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (mentionOpen && mentionCandidates.isNotEmpty)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Container(
+                      margin: const EdgeInsets.fromLTRB(14, 10, 14, 0),
+                      constraints: const BoxConstraints(maxWidth: 360),
+                      decoration: tokens.surfaceDecoration(withShadow: true),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          for (final entry in mentionCandidates.indexed)
+                            ListTile(
+                              dense: true,
+                              visualDensity: VisualDensity.compact,
+                              selected: entry.$1 == mentionIndex,
+                              selectedTileColor: tokens.accentSoft,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(
+                                  tokens.radius.clamp(0, 10),
+                                ),
+                              ),
+                              leading: AvatarWidget(
+                                name: entry.$2.user?.name ?? 'Member',
+                                avatarUrl: entry.$2.user?.avatarUrl,
+                                size: 26,
+                              ),
+                              title: Text(
+                                entry.$2.user?.name ?? 'Member',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              subtitle: entry.$2.user?.title.isEmpty ?? true
+                                  ? null
+                                  : Text(entry.$2.user!.title),
+                              onTap: () => onPickMention(entry.$2),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                if (canTrigger && !broadcastMode)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: _TriggerMenuButton(
+                        disabled:
+                            sending || triggerCheckinBusy || triggerSummaryBusy,
+                        triggerCheckinBusy: triggerCheckinBusy,
+                        triggerSummaryBusy: triggerSummaryBusy,
+                        onTriggerCheckin: onTriggerCheckin,
+                        onTriggerTeamSummary: onTriggerTeamSummary,
+                      ),
+                    ),
+                  ),
+                Padding(
+                  padding: EdgeInsets.fromLTRB(14, 10, 14, compact ? 8 : 10),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      IconButton.filledTonal(
+                        tooltip: broadcastMode
+                            ? 'Disable broadcast'
+                            : 'Broadcast to everyone',
+                        onPressed: sending ? null : onToggleBroadcast,
+                        style: IconButton.styleFrom(
+                          backgroundColor: broadcastMode
+                              ? tokens.accent
+                              : tokens.backgroundCard,
+                          foregroundColor: broadcastMode
+                              ? tokens.accentInk
+                              : tokens.accent,
+                        ),
+                        icon: const Icon(Icons.campaign_rounded),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: controller,
+                          focusNode: focusNode,
+                          minLines: 1,
+                          maxLines: 6,
+                          textInputAction: TextInputAction.newline,
+                          style: TextStyle(
+                            color: tokens.text,
+                            fontSize: compact ? 16 : null,
+                          ),
+                          decoration: InputDecoration(
+                            hintText: broadcastMode
+                                ? 'Broadcast to everyone'
+                                : 'Message Maia',
+                            hintStyle: TextStyle(color: tokens.faint),
+                            filled: true,
+                            fillColor: tokens.backgroundCard,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 12,
+                            ),
+                            border: OutlineInputBorder(
+                              borderRadius: composerRadius,
+                              borderSide: BorderSide(color: tokens.border),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: composerRadius,
+                              borderSide: BorderSide(
+                                color: broadcastMode
+                                    ? tokens.accent
+                                    : tokens.border,
                               ),
                             ),
-                            leading: AvatarWidget(
-                              name: entry.$2.user?.name ?? 'Member',
-                              avatarUrl: entry.$2.user?.avatarUrl,
-                              size: 26,
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: composerRadius,
+                              borderSide: BorderSide(color: tokens.accent),
                             ),
-                            title: Text(
-                              entry.$2.user?.name ?? 'Member',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            subtitle: entry.$2.user?.title.isEmpty ?? true
-                                ? null
-                                : Text(entry.$2.user!.title),
-                            onTap: () => onPickMention(entry.$2),
+                            hoverColor: tokens.accentSoft,
                           ),
-                      ],
-                    ),
+                          onChanged: onChanged,
+                          onSubmitted: (_) => onSend(),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      FilledButton(
+                        onPressed: sending ? null : onSend,
+                        style: FilledButton.styleFrom(
+                          shape: const CircleBorder(),
+                          padding: const EdgeInsets.all(14),
+                          backgroundColor: tokens.accent,
+                          foregroundColor: tokens.accentInk,
+                        ),
+                        child: sending
+                            ? const SpinnerWidget(size: 18)
+                            : const Icon(Icons.arrow_upward_rounded),
+                      ),
+                    ],
                   ),
                 ),
-              if (canTrigger && !broadcastMode)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: _TriggerMenuButton(
-                      disabled:
-                          sending || triggerCheckinBusy || triggerSummaryBusy,
-                      triggerCheckinBusy: triggerCheckinBusy,
-                      triggerSummaryBusy: triggerSummaryBusy,
-                      onTriggerCheckin: onTriggerCheckin,
-                      onTriggerTeamSummary: onTriggerTeamSummary,
-                    ),
-                  ),
-                ),
-              Padding(
-                padding: EdgeInsets.fromLTRB(14, 10, 14, compact ? 8 : 10),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    IconButton.filledTonal(
-                      tooltip: broadcastMode
-                          ? 'Disable broadcast'
-                          : 'Broadcast to everyone',
-                      onPressed: sending ? null : onToggleBroadcast,
-                      style: IconButton.styleFrom(
-                        backgroundColor: broadcastMode
-                            ? tokens.accent
-                            : tokens.backgroundCard,
-                        foregroundColor: broadcastMode
-                            ? tokens.accentInk
-                            : tokens.accent,
-                      ),
-                      icon: const Icon(Icons.campaign_rounded),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: TextField(
-                        controller: controller,
-                        focusNode: focusNode,
-                        minLines: 1,
-                        maxLines: 6,
-                        textInputAction: TextInputAction.newline,
-                        style: TextStyle(
-                          color: tokens.text,
-                          fontSize: compact ? 16 : null,
-                        ),
-                        decoration: InputDecoration(
-                          hintText: broadcastMode
-                              ? 'Broadcast to everyone'
-                              : 'Message Maia',
-                          hintStyle: TextStyle(color: tokens.faint),
-                          filled: true,
-                          fillColor: tokens.backgroundCard,
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 14,
-                            vertical: 12,
-                          ),
-                          border: OutlineInputBorder(
-                            borderRadius: composerRadius,
-                            borderSide: BorderSide(color: tokens.border),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: composerRadius,
-                            borderSide: BorderSide(
-                              color: broadcastMode
-                                  ? tokens.accent
-                                  : tokens.border,
-                            ),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: composerRadius,
-                            borderSide: BorderSide(color: tokens.accent),
-                          ),
-                          hoverColor: tokens.accentSoft,
-                        ),
-                        onChanged: onChanged,
-                        onSubmitted: (_) => onSend(),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    FilledButton(
-                      onPressed: sending ? null : onSend,
-                      style: FilledButton.styleFrom(
-                        shape: const CircleBorder(),
-                        padding: const EdgeInsets.all(14),
-                        backgroundColor: tokens.accent,
-                        foregroundColor: tokens.accentInk,
-                      ),
-                      child: sending
-                          ? const SpinnerWidget(size: 18)
-                          : const Icon(Icons.arrow_upward_rounded),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -4061,6 +4169,27 @@ List<Message> _ordered(List<Message> messages) {
     return a.id.compareTo(b.id);
   });
   return sorted;
+}
+
+bool _pageIsNewerThan(List<Message> previous, List<Message> candidate) {
+  if (previous.isEmpty || candidate.isEmpty) {
+    return false;
+  }
+  final previousLast = previous.last;
+  final candidateLast = candidate.last;
+  final byTime = candidateLast.createdAt.compareTo(previousLast.createdAt);
+  if (byTime != 0) {
+    return byTime > 0;
+  }
+  return candidateLast.id.compareTo(previousLast.id) > 0;
+}
+
+int? _previousAscendingOffset(int offset) {
+  if (offset <= 0) {
+    return null;
+  }
+  final previous = offset - _pageSize;
+  return previous > 0 ? previous : 0;
 }
 
 String chatMessageTimestampLabel(DateTime timestamp) {

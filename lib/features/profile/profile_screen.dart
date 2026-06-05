@@ -61,50 +61,59 @@ class ProfileScreen extends ConsumerWidget {
     final isWorkspaceAdmin =
         workspaceRole == 'admin' || workspaceRole == 'super_admin';
 
-    return Scaffold(
-      body: Stack(
-        children: [
-          const _ProfileGlow(),
-          SafeArea(
-            child: Column(
-              children: [
-                _ProfileTopBar(section: activeSection),
-                Expanded(
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      final wide = constraints.maxWidth >= 900;
-                      final nav = _ProfileNav(
-                        activeSection: activeSection,
-                        showAdminLink: isWorkspaceAdmin,
-                      );
-                      final content = _ProfileContent(
-                        section: activeSection,
-                        user: user,
-                        workspaceRole: workspaceRole,
-                      );
+    return PopScope<void>(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) {
+          return;
+        }
+        context.go('/');
+      },
+      child: Scaffold(
+        body: Stack(
+          children: [
+            const _ProfileGlow(),
+            SafeArea(
+              child: Column(
+                children: [
+                  _ProfileTopBar(section: activeSection),
+                  Expanded(
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final wide = constraints.maxWidth >= 900;
+                        final nav = _ProfileNav(
+                          activeSection: activeSection,
+                          showAdminLink: isWorkspaceAdmin,
+                        );
+                        final content = _ProfileContent(
+                          section: activeSection,
+                          user: user,
+                          workspaceRole: workspaceRole,
+                        );
 
-                      if (wide) {
-                        return Row(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                        if (wide) {
+                          return Row(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              SizedBox(width: 220, child: nav),
+                              Expanded(child: content),
+                            ],
+                          );
+                        }
+                        return Column(
                           children: [
-                            SizedBox(width: 220, child: nav),
+                            nav,
                             Expanded(child: content),
                           ],
                         );
-                      }
-                      return Column(
-                        children: [
-                          nav,
-                          Expanded(child: content),
-                        ],
-                      );
-                    },
+                      },
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
