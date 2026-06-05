@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -17,7 +19,20 @@ class LoginScreen extends ConsumerStatefulWidget {
 
 class _LoginScreenState extends ConsumerState<LoginScreen> {
   bool _loading = false;
+  bool _showDeferredSections = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Timer(const Duration(milliseconds: 16), () {
+        if (mounted) {
+          setState(() => _showDeferredSections = true);
+        }
+      });
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -50,20 +65,22 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         localError: _error,
                         onLogin: _loading ? null : _launchLogin,
                       ),
-                      SizedBox(height: desktop ? 72 : 44),
-                      const _FlowSection(),
-                      SizedBox(height: desktop ? 72 : 44),
-                      const _ProductSurfacesSection(),
-                      SizedBox(height: desktop ? 72 : 44),
-                      _ExampleSection(desktop: desktop),
-                      SizedBox(height: desktop ? 72 : 44),
-                      _ClosingSection(
-                        loading: _loading,
-                        onLogin: _loading ? null : _launchLogin,
-                      ),
-                      const SizedBox(height: 28),
-                      const _LandingFooter(),
-                      const SizedBox(height: 28),
+                      if (_showDeferredSections) ...[
+                        SizedBox(height: desktop ? 72 : 44),
+                        const _FlowSection(),
+                        SizedBox(height: desktop ? 72 : 44),
+                        const _ProductSurfacesSection(),
+                        SizedBox(height: desktop ? 72 : 44),
+                        _ExampleSection(desktop: desktop),
+                        SizedBox(height: desktop ? 72 : 44),
+                        _ClosingSection(
+                          loading: _loading,
+                          onLogin: _loading ? null : _launchLogin,
+                        ),
+                        const SizedBox(height: 28),
+                        const _LandingFooter(),
+                        const SizedBox(height: 28),
+                      ],
                     ],
                   ),
                 ),

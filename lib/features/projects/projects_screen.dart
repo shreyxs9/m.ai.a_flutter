@@ -995,9 +995,10 @@ class _ProjectsToolbar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = context.maia;
-    return Row(
+    final title = Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Text('YOUR PROJECTS', style: _eyebrowStyle(context)),
+        Flexible(child: Text('YOUR PROJECTS', style: _eyebrowStyle(context))),
         if (count > 0) ...[
           const SizedBox(width: 10),
           Text(
@@ -1005,31 +1006,68 @@ class _ProjectsToolbar extends StatelessWidget {
             style: _eyebrowStyle(context).copyWith(color: tokens.faint),
           ),
         ],
-        const SizedBox(width: 12),
-        Expanded(child: Divider(color: tokens.border)),
-        const SizedBox(width: 8),
-        IconButton(
-          tooltip: 'Refresh',
-          onPressed: loading ? null : onRefresh,
-          icon: loading
-              ? const SizedBox.square(
-                  dimension: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.refresh_rounded, size: 18),
-        ),
+      ],
+    );
+    final refreshButton = IconButton(
+      tooltip: 'Refresh',
+      onPressed: loading ? null : onRefresh,
+      icon: loading
+          ? const SizedBox.square(
+              dimension: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.refresh_rounded, size: 18),
+    );
+    final actions = Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      alignment: WrapAlignment.end,
+      children: [
         OutlinedButton.icon(
           onPressed: onJoin,
           icon: const Icon(Icons.link_rounded, size: 16),
           label: const Text('Join'),
         ),
-        const SizedBox(width: 8),
         FilledButton.icon(
           onPressed: onCreate,
           icon: const Icon(Icons.add_rounded, size: 16),
           label: const Text('New project'),
         ),
       ],
+    );
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 440) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(child: title),
+                  const SizedBox(width: 12),
+                  Expanded(child: Divider(color: tokens.border)),
+                  const SizedBox(width: 4),
+                  refreshButton,
+                ],
+              ),
+              const SizedBox(height: 10),
+              Align(alignment: Alignment.centerRight, child: actions),
+            ],
+          );
+        }
+
+        return Row(
+          children: [
+            title,
+            const SizedBox(width: 12),
+            Expanded(child: Divider(color: tokens.border)),
+            const SizedBox(width: 8),
+            refreshButton,
+            actions,
+          ],
+        );
+      },
     );
   }
 }
@@ -1055,7 +1093,6 @@ class _ProjectCard extends StatelessWidget {
           decoration: tokens
               .surfaceDecoration(
                 borderRadius: BorderRadius.circular(tokens.radius),
-                withShadow: true,
               )
               .copyWith(
                 border: Border.all(
@@ -1283,22 +1320,36 @@ class _ProjectIconDialog extends StatefulWidget {
 }
 
 class _ProjectIconDialogState extends State<_ProjectIconDialog> {
-  String _query = '';
+  String _debouncedQuery = '';
+  Timer? _searchDebounce;
+
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    super.dispose();
+  }
+
+  void _setQuery(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 160), () {
+      if (mounted) {
+        setState(() => _debouncedQuery = value);
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     final tokens = context.maia;
-    final query = _query.trim().toLowerCase();
+    final query = _debouncedQuery.trim().toLowerCase();
+    final matches = query.isEmpty
+        ? const <String>[]
+        : ProjectIconRegistry.keys
+              .where((key) => key.toLowerCase().contains(query))
+              .toList(growable: false);
     final categories = query.isEmpty
         ? ProjectIconRegistry.categories
-        : <ProjectIconCategory>[
-            ProjectIconCategory(
-              label: 'Matches',
-              keys: ProjectIconRegistry.keys
-                  .where((key) => key.toLowerCase().contains(query))
-                  .toList(growable: false),
-            ),
-          ];
+        : const <ProjectIconCategory>[];
 
     return AlertDialog(
       backgroundColor: tokens.backgroundRaised,
@@ -1314,35 +1365,53 @@ class _ProjectIconDialogState extends State<_ProjectIconDialog> {
                 prefixIcon: Icon(Icons.search_rounded),
                 hintText: 'Search icons',
               ),
-              onChanged: (value) => setState(() => _query = value),
+              onChanged: _setQuery,
             ),
             const SizedBox(height: 12),
             Expanded(
-              child: ListView(
-                children: [
-                  for (final category in categories) ...[
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8, bottom: 6),
-                      child: Text(
-                        category.label,
-                        style: _eyebrowStyle(context),
-                      ),
-                    ),
-                    Wrap(
-                      spacing: 6,
-                      runSpacing: 6,
+              child: query.isEmpty
+                  ? ListView(
                       children: [
-                        for (final key in category.keys)
-                          _IconChoice(
-                            iconKey: key,
-                            selected: key == widget.selected,
-                            onTap: () => context.pop(key),
+                        for (final category in categories) ...[
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8, bottom: 6),
+                            child: Text(
+                              category.label,
+                              style: _eyebrowStyle(context),
+                            ),
                           ),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: [
+                              for (final key in category.keys)
+                                _IconChoice(
+                                  iconKey: key,
+                                  selected: key == widget.selected,
+                                  onTap: () => context.pop(key),
+                                ),
+                            ],
+                          ),
+                        ],
                       ],
+                    )
+                  : GridView.builder(
+                      gridDelegate:
+                          const SliverGridDelegateWithMaxCrossAxisExtent(
+                            maxCrossAxisExtent: 48,
+                            mainAxisSpacing: 6,
+                            crossAxisSpacing: 6,
+                          ),
+                      itemCount: matches.length,
+                      itemBuilder: (context, index) {
+                        final key = matches[index];
+                        return _IconChoice(
+                          iconKey: key,
+                          selected: key == widget.selected,
+                          onTap: () => context.pop(key),
+                        );
+                      },
                     ),
-                  ],
-                ],
-              ),
             ),
           ],
         ),
@@ -1519,54 +1588,56 @@ class _WorkspaceEmptyProjects extends StatelessWidget {
   Widget build(BuildContext context) {
     final tokens = context.maia;
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 420),
-          child: Container(
-            padding: const EdgeInsets.fromLTRB(24, 26, 24, 24),
-            decoration: tokens.surfaceDecoration(withShadow: true),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 54,
-                  height: 54,
-                  decoration: tokens.accentSurfaceDecoration(),
-                  child: Icon(Icons.grid_view_rounded, color: tokens.accent),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'No projects yet.',
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Start a project, or join one with an invite code.',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodyMedium?.copyWith(color: tokens.dim),
-                ),
-                const SizedBox(height: 20),
-                Wrap(
-                  alignment: WrapAlignment.center,
-                  spacing: 10,
-                  runSpacing: 10,
-                  children: [
-                    OutlinedButton.icon(
-                      onPressed: onJoin,
-                      icon: const Icon(Icons.link_rounded),
-                      label: const Text('Join'),
-                    ),
-                    FilledButton.icon(
-                      onPressed: onCreate,
-                      icon: const Icon(Icons.add_rounded),
-                      label: const Text('New project'),
-                    ),
-                  ],
-                ),
-              ],
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(24, 26, 24, 24),
+              decoration: tokens.surfaceDecoration(withShadow: true),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 54,
+                    height: 54,
+                    decoration: tokens.accentSurfaceDecoration(),
+                    child: Icon(Icons.grid_view_rounded, color: tokens.accent),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'No projects yet.',
+                    style: Theme.of(context).textTheme.headlineSmall,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Start a project, or join one with an invite code.',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodyMedium?.copyWith(color: tokens.dim),
+                  ),
+                  const SizedBox(height: 20),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: onJoin,
+                        icon: const Icon(Icons.link_rounded),
+                        label: const Text('Join'),
+                      ),
+                      FilledButton.icon(
+                        onPressed: onCreate,
+                        icon: const Icon(Icons.add_rounded),
+                        label: const Text('New project'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -1688,29 +1759,13 @@ class _PersonAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final initials = user.name
-        .trim()
-        .split(RegExp(r'\s+'))
-        .where((part) => part.isNotEmpty)
-        .take(2)
-        .map((part) => part[0].toUpperCase())
-        .join();
     final color = _avatarColor(user.name);
 
-    return CircleAvatar(
+    return UserAvatarWidget(
+      user: user,
+      name: user.name,
       radius: 12,
-      backgroundColor: color.withValues(alpha: 0.18),
-      foregroundImage: user.avatarUrl == null
-          ? null
-          : NetworkImage(user.avatarUrl!),
-      child: Text(
-        initials.isEmpty ? '?' : initials,
-        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-          color: color,
-          fontWeight: FontWeight.w800,
-          fontSize: 9,
-        ),
-      ),
+      color: color,
     );
   }
 }
@@ -1756,11 +1811,13 @@ class _MaiaMarkState extends State<_MaiaMark>
       color: tokens.accent,
     );
     if (!widget.animate) {
-      return mark;
+      return RepaintBoundary(child: mark);
     }
-    return FadeTransition(
-      opacity: Tween<double>(begin: 0.45, end: 1).animate(_controller),
-      child: mark,
+    return RepaintBoundary(
+      child: FadeTransition(
+        opacity: Tween<double>(begin: 0.45, end: 1).animate(_controller),
+        child: mark,
+      ),
     );
   }
 }

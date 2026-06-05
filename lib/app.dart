@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import 'core/constants/app_constants.dart';
 import 'core/router/app_router.dart';
@@ -32,10 +33,32 @@ class MaiaApp extends ConsumerWidget {
       themeMode: themeSelection.mode.materialThemeMode,
       routerConfig: router,
       builder: (context, child) {
+        return _AppShellOverlay(
+          router: router,
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
+    );
+  }
+}
+
+class _AppShellOverlay extends StatelessWidget {
+  const _AppShellOverlay({required this.router, required this.child});
+
+  final GoRouter router;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: router.routeInformationProvider,
+      builder: (context, _) {
+        final location = router.routeInformationProvider.value.uri.path;
+        final suppressPrompt = location.startsWith('/project/');
         return Stack(
           children: [
-            child ?? const SizedBox.shrink(),
-            const PushPromptBanner(),
+            child,
+            PushPromptBanner(suppressed: suppressPrompt),
           ],
         );
       },

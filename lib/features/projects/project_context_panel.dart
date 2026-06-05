@@ -32,6 +32,8 @@ class _ProjectContextPanelState extends ConsumerState<ProjectContextPanel> {
   List<ProjectStateHistoryItem> _stateHistory =
       const <ProjectStateHistoryItem>[];
   bool _loading = true;
+  bool _loadingGoalsHistory = false;
+  bool _loadingStateHistory = false;
   bool _goalsHistoryOpen = false;
   bool _stateHistoryOpen = false;
   int _goalsHistoryIndex = 0;
@@ -46,47 +48,34 @@ class _ProjectContextPanelState extends ConsumerState<ProjectContextPanel> {
   @override
   void didUpdateWidget(covariant ProjectContextPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.projectId != widget.projectId ||
-        oldWidget.refreshTick != widget.refreshTick) {
+    if (oldWidget.projectId != widget.projectId) {
+      setState(() {
+        _goalsHistory = const <ProjectGoalsHistoryItem>[];
+        _stateHistory = const <ProjectStateHistoryItem>[];
+        _goalsHistoryOpen = false;
+        _stateHistoryOpen = false;
+        _goalsHistoryIndex = 0;
+        _stateHistoryIndex = 0;
+      });
+      unawaited(_load());
+    } else if (oldWidget.refreshTick != widget.refreshTick) {
       unawaited(_load());
     }
   }
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    setState(() => _loading = _goals == null && _state == null);
     try {
       final base = await Future.wait<Object?>([
         ref.read(projectServiceProvider).goals(widget.projectId),
         ref.read(projectServiceProvider).state(widget.projectId),
       ]);
-      List<ProjectGoalsHistoryItem> goalsHistory =
-          const <ProjectGoalsHistoryItem>[];
-      List<ProjectStateHistoryItem> stateHistory =
-          const <ProjectStateHistoryItem>[];
-      if (widget.isAdmin) {
-        final history = await Future.wait<Object?>([
-          ref.read(projectServiceProvider).goalsHistory(widget.projectId),
-          ref.read(projectServiceProvider).stateHistory(widget.projectId),
-        ]);
-        goalsHistory = history[0] as List<ProjectGoalsHistoryItem>;
-        stateHistory = history[1] as List<ProjectStateHistoryItem>;
-      }
       if (!mounted) {
         return;
       }
       setState(() {
         _goals = base[0] as ProjectGoals?;
         _state = base[1] as ProjectState?;
-        _goalsHistory = goalsHistory;
-        _stateHistory = stateHistory;
-        _goalsHistoryIndex = _goalsHistoryIndex.clamp(
-          0,
-          (_goalsHistory.length - 1).clamp(0, 9999),
-        );
-        _stateHistoryIndex = _stateHistoryIndex.clamp(
-          0,
-          (_stateHistory.length - 1).clamp(0, 9999),
-        );
         _loading = false;
       });
     } catch (_) {
@@ -95,6 +84,74 @@ class _ProjectContextPanelState extends ConsumerState<ProjectContextPanel> {
       }
       setState(() => _loading = false);
     }
+  }
+
+  Future<void> _toggleGoalsHistory() async {
+    if (_goalsHistoryOpen) {
+      setState(() => _goalsHistoryOpen = false);
+      return;
+    }
+    if (_goalsHistory.isEmpty) {
+      setState(() => _loadingGoalsHistory = true);
+      try {
+        final history = await ref
+            .read(projectServiceProvider)
+            .goalsHistory(widget.projectId);
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _goalsHistory = history;
+          _goalsHistoryIndex = 0;
+          _goalsHistoryOpen = history.isNotEmpty;
+        });
+      } catch (_) {
+        // Keep the current context visible if historical revisions fail to load.
+      } finally {
+        if (mounted) {
+          setState(() => _loadingGoalsHistory = false);
+        }
+      }
+      return;
+    }
+    setState(() {
+      _goalsHistoryOpen = true;
+      _goalsHistoryIndex = 0;
+    });
+  }
+
+  Future<void> _toggleStateHistory() async {
+    if (_stateHistoryOpen) {
+      setState(() => _stateHistoryOpen = false);
+      return;
+    }
+    if (_stateHistory.isEmpty) {
+      setState(() => _loadingStateHistory = true);
+      try {
+        final history = await ref
+            .read(projectServiceProvider)
+            .stateHistory(widget.projectId);
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _stateHistory = history;
+          _stateHistoryIndex = 0;
+          _stateHistoryOpen = history.isNotEmpty;
+        });
+      } catch (_) {
+        // Keep the current context visible if historical revisions fail to load.
+      } finally {
+        if (mounted) {
+          setState(() => _loadingStateHistory = false);
+        }
+      }
+      return;
+    }
+    setState(() {
+      _stateHistoryOpen = true;
+      _stateHistoryIndex = 0;
+    });
   }
 
   @override
@@ -121,15 +178,10 @@ class _ProjectContextPanelState extends ConsumerState<ProjectContextPanel> {
             title: 'Goals',
             subtitle: 'What we are aiming at',
             count: displayedGoals.length,
-            loading: _loading,
-            historyVisible: widget.isAdmin && _goalsHistory.length > 1,
+            loading: _loading || _loadingGoalsHistory,
+            historyVisible: widget.isAdmin,
             historyOpen: _goalsHistoryOpen,
-            onToggleHistory: () {
-              setState(() {
-                _goalsHistoryOpen = !_goalsHistoryOpen;
-                _goalsHistoryIndex = 0;
-              });
-            },
+            onToggleHistory: () => unawaited(_toggleGoalsHistory()),
             revisionNav: _goalsHistoryOpen && _goalsHistory.length > 1
                 ? _RevisionNav(
                     current: _goalsHistoryIndex,
@@ -182,15 +234,10 @@ class _ProjectContextPanelState extends ConsumerState<ProjectContextPanel> {
           _ContextSection(
             title: 'State',
             subtitle: 'Where we are right now',
-            loading: _loading,
-            historyVisible: widget.isAdmin && _stateHistory.length > 1,
+            loading: _loading || _loadingStateHistory,
+            historyVisible: widget.isAdmin,
             historyOpen: _stateHistoryOpen,
-            onToggleHistory: () {
-              setState(() {
-                _stateHistoryOpen = !_stateHistoryOpen;
-                _stateHistoryIndex = 0;
-              });
-            },
+            onToggleHistory: () => unawaited(_toggleStateHistory()),
             revisionNav: _stateHistoryOpen && _stateHistory.length > 1
                 ? _RevisionNav(
                     current: _stateHistoryIndex,

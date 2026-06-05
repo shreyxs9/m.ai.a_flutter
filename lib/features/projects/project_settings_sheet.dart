@@ -68,6 +68,7 @@ class ProjectSettingsSheet extends ConsumerStatefulWidget {
 
 class _ProjectSettingsSheetState extends ConsumerState<ProjectSettingsSheet> {
   final _nameController = TextEditingController();
+  final _saveBarRevision = ValueNotifier<int>(0);
   List<TenantMembership> _tenantMembers = const <TenantMembership>[];
   _SettingsTab _tab = _SettingsTab.general;
   String? _icon;
@@ -99,6 +100,7 @@ class _ProjectSettingsSheetState extends ConsumerState<ProjectSettingsSheet> {
 
   @override
   void dispose() {
+    _saveBarRevision.dispose();
     _nameController.dispose();
     super.dispose();
   }
@@ -138,6 +140,12 @@ class _ProjectSettingsSheetState extends ConsumerState<ProjectSettingsSheet> {
         _checkinTime != _timeForInput(widget.project.checkinTime) ||
         _timezone != widget.project.checkinTimezone ||
         _digestDelay != widget.project.digestDelayMinutes;
+  }
+
+  void _touchSaveBar() {
+    _saved = false;
+    _error = null;
+    _saveBarRevision.value++;
   }
 
   Future<void> _save() async {
@@ -323,20 +331,27 @@ class _ProjectSettingsSheetState extends ConsumerState<ProjectSettingsSheet> {
                           ],
                         ),
                 ),
-                _SaveBar(
-                  visible: _dirty || _saved || _error != null,
-                  saving: _saving,
-                  saved: _saved,
-                  error: _error,
-                  canSave: _nameController.text.trim().isNotEmpty,
-                  onDiscard: () {
-                    setState(() {
-                      _syncFromProject();
-                      _error = null;
-                      _saved = false;
-                    });
-                  },
-                  onSave: _save,
+                AnimatedBuilder(
+                  animation: Listenable.merge([
+                    _nameController,
+                    _saveBarRevision,
+                  ]),
+                  builder: (context, _) => _SaveBar(
+                    visible: _dirty || _saved || _error != null,
+                    saving: _saving,
+                    saved: _saved,
+                    error: _error,
+                    canSave: _nameController.text.trim().isNotEmpty,
+                    onDiscard: () {
+                      setState(() {
+                        _syncFromProject();
+                        _error = null;
+                        _saved = false;
+                        _saveBarRevision.value++;
+                      });
+                    },
+                    onSave: _save,
+                  ),
                 ),
               ],
             ),
@@ -364,20 +379,29 @@ class _ProjectSettingsSheetState extends ConsumerState<ProjectSettingsSheet> {
           icon: _icon,
           canDelete: widget.canDeleteProject,
           deleting: _deleting,
-          onIconChanged: (value) => setState(() => _icon = value),
-          onChanged: () => setState(() {
-            _saved = false;
-            _error = null;
+          onIconChanged: (value) => setState(() {
+            _icon = value;
+            _touchSaveBar();
           }),
+          onChanged: _touchSaveBar,
           onDelete: _deleteProject,
         ),
         _SettingsTab.schedule => _SchedulePanel(
           checkinTime: _checkinTime,
           timezone: _timezone,
           digestDelay: _digestDelay,
-          onTimeChanged: (value) => setState(() => _checkinTime = value),
-          onTimezoneChanged: (value) => setState(() => _timezone = value),
-          onDigestChanged: (value) => setState(() => _digestDelay = value),
+          onTimeChanged: (value) => setState(() {
+            _checkinTime = value;
+            _touchSaveBar();
+          }),
+          onTimezoneChanged: (value) => setState(() {
+            _timezone = value;
+            _touchSaveBar();
+          }),
+          onDigestChanged: (value) => setState(() {
+            _digestDelay = value;
+            _touchSaveBar();
+          }),
         ),
         _SettingsTab.members => _MembersPanel(
           project: widget.project,
@@ -978,12 +1002,11 @@ class _InitialAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final name = user?.name.trim() ?? 'Member';
-    return CircleAvatar(
+    return UserAvatarWidget(
+      user: user,
+      name: name,
       radius: 17,
-      foregroundImage: user?.avatarUrl == null
-          ? null
-          : NetworkImage(user!.avatarUrl!),
-      child: Text(name.isEmpty ? '?' : name[0].toUpperCase()),
+      initialsChars: 1,
     );
   }
 }

@@ -21,6 +21,7 @@ const _pageSize = 100;
 const _reconcileWindow = 40;
 const _activePollInterval = Duration(seconds: 3);
 const _idlePollInterval = Duration(seconds: 10);
+const _autoScrollBottomThreshold = 96.0;
 const _messageTypes = <String>{
   'maia_ask',
   'user_reply',
@@ -29,6 +30,11 @@ const _messageTypes = <String>{
   'maia_summary',
   'maia_digest',
 };
+
+final _mediaDownloadUrlProvider =
+    FutureProvider.family<MediaDownloadUrl?, String>(
+      (ref, assetId) => ref.watch(mediaServiceProvider).downloadUrl(assetId),
+    );
 
 class MessageAttachmentRef {
   const MessageAttachmentRef({
@@ -321,6 +327,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       }
       final latest = results[0] as List<Message>;
       final status = results[1] as InferenceStatus;
+      final oldSignatures = <String, String>{
+        for (final message in _messages) message.id: _messageSignature(message),
+      };
+      final timelineChanged = latest.any(
+        (message) => oldSignatures[message.id] != _messageSignature(message),
+      );
+      final inferenceChanged =
+          status.active != _inferenceStatus.active ||
+          status.sessionId != _inferenceStatus.sessionId;
+      final shouldScroll =
+          (immediate || timelineChanged) && _isNearBottomForAutoScroll();
+      final hadComposerFocus = _composerFocus.hasFocus;
       setState(() {
         _messages = _ordered(
           _merge(_dropOptimisticTwin(_messages, latest), latest),
@@ -333,10 +351,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         _lastPollAt = DateTime.now();
         _pollError = null;
       });
-      if (latest.isNotEmpty || immediate) {
+      if (shouldScroll) {
         _scrollToBottomSoon();
       }
-      if (!status.active) {
+      if (hadComposerFocus && inferenceChanged && !status.active) {
         _composerFocus.requestFocus();
       }
     } catch (error) {
@@ -899,6 +917,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         .toList(growable: false);
   }
 
+  bool _isNearBottomForAutoScroll() {
+    if (!_scrollController.hasClients) {
+      return true;
+    }
+    final position = _scrollController.position;
+    return position.maxScrollExtent - position.pixels <=
+        _autoScrollBottomThreshold;
+  }
+
   void _scrollToBottomSoon({bool jump = false}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollController.hasClients) {
@@ -971,128 +998,137 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     final canTrigger =
         currentUser?.isSuperAdmin == true || isProjectAdmin || isWorkspaceAdmin;
 
-    return Scaffold(
-      backgroundColor: tokens.background,
-      body: SafeArea(
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final desktop = constraints.maxWidth >= 980;
-            final rightPanelVisible = desktop && _rightPanelOpen;
-            return Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    children: [
-                      _ProjectHeader(
-                        project: project,
-                        rightPanelOpen: _rightPanelOpen,
-                        showPanelToggle: desktop,
-                        canOpenSettings: isAdmin || canDeleteProject,
-                        onBack: () => context.go('/'),
-                        onTogglePanel: () {
-                          setState(() => _rightPanelOpen = !_rightPanelOpen);
-                        },
-                        onSettings: () => _showProjectSettings(
-                          project,
-                          isAdmin,
-                          canDeleteProject,
-                        ),
-                      ),
-                      Expanded(
-                        child: _activeMemberId == null
-                            ? _buildMessageList(project)
-                            : _MemberTimelineView(
-                                project: project,
-                                memberId: _activeMemberId!,
-                                currentUserId: currentUserId,
-                                messages: _memberTimeline,
-                                loading: _timelineLoading,
-                                sending: _isSending,
-                                onBack: () => setState(() {
-                                  _activeMemberId = null;
-                                  _memberTimeline = const <Message>[];
-                                }),
-                                onRelay: (body) => _sendRelay(
-                                  targetUserId: _activeMemberId!,
-                                  body: body,
-                                ),
-                                onToggleResolved: _toggleResolved,
-                              ),
-                      ),
-                      if (_activeMemberId == null)
-                        _Composer(
-                          controller: _composerController,
-                          focusNode: _composerFocus,
-                          sending: _isSending,
-                          broadcastMode: _broadcastMode,
-                          mentionOpen: _mentionOpen,
-                          mentionIndex: _mentionIndex,
-                          mentionCandidates: _mentionCandidates,
-                          canTrigger: canTrigger,
-                          triggerCheckinBusy: _triggerCheckinBusy,
-                          triggerSummaryBusy: _triggerSummaryBusy,
-                          onChanged: _handleComposerChanged,
-                          onPickMention: _insertMention,
-                          onToggleBroadcast: () {
-                            setState(() {
-                              _broadcastMode = !_broadcastMode;
-                              if (_broadcastMode) {
-                                _mentionOpen = false;
-                              }
-                            });
+    return PopScope<void>(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) {
+          return;
+        }
+        context.go('/');
+      },
+      child: Scaffold(
+        backgroundColor: tokens.background,
+        body: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final desktop = constraints.maxWidth >= 980;
+              final rightPanelVisible = desktop && _rightPanelOpen;
+              return Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      children: [
+                        _ProjectHeader(
+                          project: project,
+                          rightPanelOpen: _rightPanelOpen,
+                          showPanelToggle: desktop,
+                          canOpenSettings: isAdmin || canDeleteProject,
+                          onBack: () => context.go('/'),
+                          onTogglePanel: () {
+                            setState(() => _rightPanelOpen = !_rightPanelOpen);
                           },
-                          onTriggerCheckin: _triggerCheckin,
-                          onTriggerTeamSummary: _triggerTeamSummary,
-                          onSend: _send,
+                          onSettings: () => _showProjectSettings(
+                            project,
+                            isAdmin,
+                            canDeleteProject,
+                          ),
                         ),
-                    ],
+                        Expanded(
+                          child: _activeMemberId == null
+                              ? _buildMessageList(project)
+                              : _MemberTimelineView(
+                                  project: project,
+                                  memberId: _activeMemberId!,
+                                  currentUserId: currentUserId,
+                                  messages: _memberTimeline,
+                                  loading: _timelineLoading,
+                                  sending: _isSending,
+                                  onBack: () => setState(() {
+                                    _activeMemberId = null;
+                                    _memberTimeline = const <Message>[];
+                                  }),
+                                  onRelay: (body) => _sendRelay(
+                                    targetUserId: _activeMemberId!,
+                                    body: body,
+                                  ),
+                                  onToggleResolved: _toggleResolved,
+                                ),
+                        ),
+                        if (_activeMemberId == null)
+                          _Composer(
+                            controller: _composerController,
+                            focusNode: _composerFocus,
+                            sending: _isSending,
+                            broadcastMode: _broadcastMode,
+                            mentionOpen: _mentionOpen,
+                            mentionIndex: _mentionIndex,
+                            mentionCandidates: _mentionCandidates,
+                            canTrigger: canTrigger,
+                            triggerCheckinBusy: _triggerCheckinBusy,
+                            triggerSummaryBusy: _triggerSummaryBusy,
+                            onChanged: _handleComposerChanged,
+                            onPickMention: _insertMention,
+                            onToggleBroadcast: () {
+                              setState(() {
+                                _broadcastMode = !_broadcastMode;
+                                if (_broadcastMode) {
+                                  _mentionOpen = false;
+                                }
+                              });
+                            },
+                            onTriggerCheckin: _triggerCheckin,
+                            onTriggerTeamSummary: _triggerTeamSummary,
+                            onSend: _send,
+                          ),
+                      ],
+                    ),
                   ),
-                ),
-                if (rightPanelVisible)
-                  _RightPanel(
-                    project: project,
-                    teamStatus: _teamStatus,
-                    currentUserId: currentUserId,
-                    activeMemberId: _activeMemberId,
-                    isAdmin: isAdmin,
-                    refreshTick: _projectUpdateTick,
-                    onCollapse: () => setState(() => _rightPanelOpen = false),
-                    onSelectMember: (status) {
-                      if (status.userId == currentUserId) {
-                        setState(() {
-                          _activeMemberId = null;
-                          _relayTarget = null;
-                        });
-                        return;
-                      }
-                      if (isAdmin) {
-                        unawaited(_loadMemberTimeline(status.userId));
-                      } else {
-                        setState(() => _relayTarget = status);
-                      }
-                    },
-                  ),
-              ],
-            );
-          },
+                  if (rightPanelVisible)
+                    _RightPanel(
+                      project: project,
+                      teamStatus: _teamStatus,
+                      currentUserId: currentUserId,
+                      activeMemberId: _activeMemberId,
+                      isAdmin: isAdmin,
+                      refreshTick: _projectUpdateTick,
+                      onCollapse: () => setState(() => _rightPanelOpen = false),
+                      onSelectMember: (status) {
+                        if (status.userId == currentUserId) {
+                          setState(() {
+                            _activeMemberId = null;
+                            _relayTarget = null;
+                          });
+                          return;
+                        }
+                        if (isAdmin) {
+                          unawaited(_loadMemberTimeline(status.userId));
+                        } else {
+                          setState(() => _relayTarget = status);
+                        }
+                      },
+                    ),
+                ],
+              );
+            },
+          ),
         ),
+        bottomSheet: _relayTarget == null
+            ? null
+            : _RelaySheet(
+                target: _relayTarget!,
+                onClose: () => setState(() => _relayTarget = null),
+                onSubmit: (body) async {
+                  final target = _relayTarget;
+                  if (target == null) {
+                    return;
+                  }
+                  await _sendRelay(targetUserId: target.userId, body: body);
+                  if (mounted) {
+                    setState(() => _relayTarget = null);
+                  }
+                },
+              ),
       ),
-      bottomSheet: _relayTarget == null
-          ? null
-          : _RelaySheet(
-              target: _relayTarget!,
-              onClose: () => setState(() => _relayTarget = null),
-              onSubmit: (body) async {
-                final target = _relayTarget;
-                if (target == null) {
-                  return;
-                }
-                await _sendRelay(targetUserId: target.userId, body: body);
-                if (mounted) {
-                  setState(() => _relayTarget = null);
-                }
-              },
-            ),
     );
   }
 
@@ -1170,20 +1206,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         if (!_messageTypes.contains(message.type)) {
           return const SizedBox.shrink();
         }
-        return _MessageBubble(
-          message: message,
-          project: project,
-          currentUserId: currentUserId,
-          messagesById: messagesById,
-          myThreadId: _thread?.id,
-          onToggleResolved: _toggleResolved,
-          onConfirmMediaRelay: _sendConfirmationReply,
-          onRelayReply: (message, body) => _sendRelay(
-            targetUserId: message.recipient?.kind == 'everyone'
-                ? null
-                : message.fromUserId,
-            body: body,
-            repliesToMessageId: message.id,
+        return RepaintBoundary(
+          key: ValueKey(message.id),
+          child: _MessageBubble(
+            message: message,
+            project: project,
+            currentUserId: currentUserId,
+            messagesById: messagesById,
+            myThreadId: _thread?.id,
+            onToggleResolved: _toggleResolved,
+            onConfirmMediaRelay: _sendConfirmationReply,
+            onRelayReply: (message, body) => _sendRelay(
+              targetUserId: message.recipient?.kind == 'everyone'
+                  ? null
+                  : message.fromUserId,
+              body: body,
+              repliesToMessageId: message.id,
+            ),
           ),
         );
       },
@@ -1582,7 +1621,7 @@ class _MessageBubble extends StatelessWidget {
                           const SizedBox(width: 6),
                         ],
                         Text(
-                          DateFormat('h:mm a').format(message.createdAt),
+                          chatMessageTimestampLabel(message.createdAt),
                           style: Theme.of(context).textTheme.labelSmall
                               ?.copyWith(
                                 color: tokens.faint,
@@ -1841,7 +1880,7 @@ class _RelayMediaConfirmBubbleState extends State<_RelayMediaConfirmBubble> {
                     Padding(
                       padding: const EdgeInsets.only(top: 8),
                       child: Text(
-                        DateFormat('h:mm a').format(widget.message.createdAt),
+                        chatMessageTimestampLabel(widget.message.createdAt),
                         style: Theme.of(context).textTheme.labelSmall?.copyWith(
                           color: tokens.faint,
                           fontFeatures: const [FontFeature.tabularFigures()],
@@ -1891,10 +1930,11 @@ class _AttachmentTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final tokens = context.maia;
-    return FutureBuilder<MediaDownloadUrl?>(
-      future: ref.read(mediaServiceProvider).downloadUrl(attachment.assetId),
-      builder: (context, snapshot) {
-        final signed = snapshot.data;
+    final signedValue = ref.watch(
+      _mediaDownloadUrlProvider(attachment.assetId),
+    );
+    return signedValue.when(
+      data: (signed) {
         final url = signed?.thumbUrl ?? signed?.url;
         final status = signed?.status.isNotEmpty == true
             ? signed!.status
@@ -1922,6 +1962,17 @@ class _AttachmentTile extends ConsumerWidget {
                   Image.network(
                     url,
                     fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                    cacheWidth: (112 * MediaQuery.devicePixelRatioOf(context))
+                        .round(),
+                    loadingBuilder: (context, child, loadingProgress) =>
+                        loadingProgress == null
+                        ? child
+                        : _AttachmentPlaceholder(
+                            label: attachment.kind,
+                            icon: Icons.image_outlined,
+                            color: tokens.faint,
+                          ),
                     errorBuilder: (context, error, stackTrace) =>
                         _AttachmentPlaceholder(
                           label: 'unavailable',
@@ -1936,11 +1987,7 @@ class _AttachmentTile extends ConsumerWidget {
                   )
                 else
                   _AttachmentPlaceholder(
-                    label: snapshot.hasError
-                        ? 'unavailable'
-                        : snapshot.connectionState == ConnectionState.done
-                        ? attachment.kind
-                        : '...',
+                    label: attachment.kind,
                     icon: isImage
                         ? Icons.image_outlined
                         : Icons.play_circle_outline_rounded,
@@ -1957,6 +2004,18 @@ class _AttachmentTile extends ConsumerWidget {
           ),
         );
       },
+      error: (error, stackTrace) => _AttachmentFrame(
+        attachment: attachment,
+        label: 'unavailable',
+        icon: Icons.broken_image_outlined,
+      ),
+      loading: () => _AttachmentFrame(
+        attachment: attachment,
+        label: '...',
+        icon: attachment.kind == 'image'
+            ? Icons.image_outlined
+            : Icons.play_circle_outline_rounded,
+      ),
     );
   }
 
@@ -1980,7 +2039,20 @@ class _AttachmentTile extends ConsumerWidget {
           children: [
             Center(
               child: InteractiveViewer(
-                child: Image.network(url, fit: BoxFit.contain),
+                child: Image.network(
+                  url,
+                  fit: BoxFit.contain,
+                  gaplessPlayback: true,
+                  loadingBuilder: (context, child, loadingProgress) =>
+                      loadingProgress == null
+                      ? child
+                      : const SpinnerWidget(size: 28),
+                  errorBuilder: (context, error, stackTrace) => const Icon(
+                    Icons.broken_image_outlined,
+                    color: Colors.white70,
+                    size: 42,
+                  ),
+                ),
               ),
             ),
             Positioned(
@@ -1993,6 +2065,45 @@ class _AttachmentTile extends ConsumerWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _AttachmentFrame extends StatelessWidget {
+  const _AttachmentFrame({
+    required this.attachment,
+    required this.label,
+    required this.icon,
+  });
+
+  final MessageAttachmentRef attachment;
+  final String label;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.maia;
+    return Container(
+      width: 112,
+      height: 112,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: tokens.backgroundRaised,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: tokens.border),
+      ),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          _AttachmentPlaceholder(label: label, icon: icon, color: tokens.faint),
+          if (attachment.status != 'ready')
+            Positioned(
+              left: 6,
+              top: 6,
+              child: _AttachmentStatusBadge(status: attachment.status),
+            ),
+        ],
       ),
     );
   }
@@ -3062,7 +3173,7 @@ class _RelayAckPillState extends State<_RelayAckPill> {
             Padding(
               padding: const EdgeInsets.only(left: 6, top: 2),
               child: Text(
-                DateFormat('h:mm a').format(widget.message.createdAt),
+                chatMessageTimestampLabel(widget.message.createdAt),
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
                   color: tokens.faint,
                   fontFeatures: const [FontFeature.tabularFigures()],
@@ -3157,7 +3268,7 @@ class _InboundRelayPillState extends State<_InboundRelayPill> {
             Padding(
               padding: const EdgeInsets.only(left: 6, top: 2),
               child: Text(
-                DateFormat('h:mm a').format(widget.message.createdAt),
+                chatMessageTimestampLabel(widget.message.createdAt),
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
                   color: tokens.faint,
                   fontFeatures: const [FontFeature.tabularFigures()],
@@ -3340,7 +3451,7 @@ class _SummaryBubbleState extends State<_SummaryBubble> {
                         style: TextStyle(color: tokens.dim),
                       ),
                     Text(
-                      DateFormat('h:mm a').format(widget.message.createdAt),
+                      chatMessageTimestampLabel(widget.message.createdAt),
                       style: TextStyle(color: tokens.faint),
                     ),
                   ],
@@ -3689,15 +3800,19 @@ class _MaiaMarkWidgetState extends State<MaiaMarkWidget>
   @override
   Widget build(BuildContext context) {
     final color = widget.color ?? context.maia.accent;
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, child) {
-        final pulse = widget.animate ? 0.85 + (_controller.value * 0.18) : 1.0;
-        return CustomPaint(
-          size: Size.square(widget.size),
-          painter: _MaiaMarkPainter(color: color, pulse: pulse),
-        );
-      },
+    return RepaintBoundary(
+      child: AnimatedBuilder(
+        animation: _controller,
+        builder: (context, child) {
+          final pulse = widget.animate
+              ? 0.85 + (_controller.value * 0.18)
+              : 1.0;
+          return CustomPaint(
+            size: Size.square(widget.size),
+            painter: _MaiaMarkPainter(color: color, pulse: pulse),
+          );
+        },
+      ),
     );
   }
 }
@@ -3752,37 +3867,38 @@ class AvatarWidget extends StatelessWidget {
   Widget build(BuildContext context) {
     final fallbackColor = color ?? _avatarColor(name);
     final url = avatarUrl;
-    return ClipOval(
-      child: Container(
-        width: size,
-        height: size,
-        color: url == null || url.isEmpty
-            ? fallbackColor.withValues(alpha: 0.20)
-            : Colors.transparent,
-        alignment: Alignment.center,
-        child: url == null || url.isEmpty
-            ? Text(
-                _initials(name, initialsChars),
-                style: TextStyle(
-                  color: fallbackColor,
-                  fontSize: (size * 0.4).roundToDouble(),
-                  fontWeight: FontWeight.w800,
+    final fallback = ColoredBox(
+      color: fallbackColor.withValues(alpha: 0.20),
+      child: Center(
+        child: Text(
+          _initials(name, initialsChars),
+          style: TextStyle(
+            color: fallbackColor,
+            fontSize: (size * 0.4).roundToDouble(),
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ),
+    );
+    return RepaintBoundary(
+      child: ClipOval(
+        child: SizedBox.square(
+          dimension: size,
+          child: url == null || url.isEmpty
+              ? fallback
+              : Image.network(
+                  url,
+                  fit: BoxFit.cover,
+                  width: size,
+                  height: size,
+                  gaplessPlayback: true,
+                  cacheWidth: (size * MediaQuery.devicePixelRatioOf(context))
+                      .round(),
+                  loadingBuilder: (context, child, loadingProgress) =>
+                      loadingProgress == null ? child : fallback,
+                  errorBuilder: (context, error, stackTrace) => fallback,
                 ),
-              )
-            : Image.network(
-                url,
-                fit: BoxFit.cover,
-                width: size,
-                height: size,
-                errorBuilder: (context, error, stackTrace) => Text(
-                  _initials(name, initialsChars),
-                  style: TextStyle(
-                    color: fallbackColor,
-                    fontSize: (size * 0.4).roundToDouble(),
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ),
+        ),
       ),
     );
   }
@@ -3837,14 +3953,16 @@ class _SkeletonWidgetState extends State<SkeletonWidget>
   @override
   Widget build(BuildContext context) {
     final tokens = context.maia;
-    return FadeTransition(
-      opacity: Tween<double>(begin: 0.45, end: 0.92).animate(_controller),
-      child: Container(
-        width: widget.width,
-        height: widget.height,
-        decoration: BoxDecoration(
-          color: tokens.border.withValues(alpha: 0.75),
-          borderRadius: BorderRadius.circular(widget.radius),
+    return RepaintBoundary(
+      child: FadeTransition(
+        opacity: Tween<double>(begin: 0.45, end: 0.92).animate(_controller),
+        child: Container(
+          width: widget.width,
+          height: widget.height,
+          decoration: BoxDecoration(
+            color: tokens.border.withValues(alpha: 0.75),
+            borderRadius: BorderRadius.circular(widget.radius),
+          ),
         ),
       ),
     );
@@ -3943,6 +4061,26 @@ List<Message> _ordered(List<Message> messages) {
     return a.id.compareTo(b.id);
   });
   return sorted;
+}
+
+String chatMessageTimestampLabel(DateTime timestamp) {
+  return DateFormat('h:mm a').format(timestamp.toLocal());
+}
+
+String _messageSignature(Message message) {
+  return Object.hash(
+    message.id,
+    message.type,
+    message.body,
+    message.resolvedAt?.millisecondsSinceEpoch,
+    message.extra,
+    messageAttachmentsOf(message)
+        .map(
+          (attachment) =>
+              '${attachment.assetId}:${attachment.status}:${attachment.kind}',
+        )
+        .join('|'),
+  ).toString();
 }
 
 Duration chatPollInterval({

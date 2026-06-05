@@ -278,6 +278,21 @@ void main() {
     });
   });
 
+  group('chat timestamp labels', () {
+    test('formats backend UTC timestamps in local time', () {
+      final utcTimestamp = DateTime.utc(2026, 5, 15, 8, 0);
+      final localTimestamp = utcTimestamp.toLocal();
+
+      expect(
+        chatMessageTimestampLabel(utcTimestamp),
+        chatMessageTimestampLabel(localTimestamp),
+      );
+      if (localTimestamp.timeZoneOffset != Duration.zero) {
+        expect(chatMessageTimestampLabel(utcTimestamp), isNot('8:00 AM'));
+      }
+    });
+  });
+
   group('media relay confirmation', () {
     test('detects relay media confirmation maia_note', () {
       final message = _message(

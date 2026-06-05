@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -12,11 +13,14 @@ import '../../features/profile/profile_screen.dart';
 import '../../features/projects/projects_screen.dart';
 
 final appRouterProvider = Provider<GoRouter>((ref) {
-  final authValue = ref.watch(authControllerProvider);
+  final authRefresh = _AuthRouteRefresh(ref);
+  ref.onDispose(authRefresh.dispose);
 
   return GoRouter(
     initialLocation: '/',
+    refreshListenable: authRefresh,
     redirect: (context, state) {
+      final authValue = authRefresh.authValue;
       final auth = authValue.asData?.value;
       final loading = authValue.isLoading || (auth?.loading ?? true);
       if (loading) {
@@ -46,21 +50,30 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     routes: [
       GoRoute(
         path: '/welcome',
-        builder: (context, state) => const LoginScreen(),
+        pageBuilder: (context, state) => _routePage(state, const LoginScreen()),
       ),
-      GoRoute(path: '/login', builder: (context, state) => const LoginScreen()),
-      GoRoute(path: '/', builder: (context, state) => const ProjectsScreen()),
+      GoRoute(
+        path: '/login',
+        pageBuilder: (context, state) => _routePage(state, const LoginScreen()),
+      ),
+      GoRoute(
+        path: '/',
+        pageBuilder: (context, state) =>
+            _routePage(state, const ProjectsScreen()),
+      ),
       GoRoute(
         path: '/join/:code',
-        builder: (context, state) {
-          return InviteRedirectScreen(code: state.pathParameters['code'] ?? '');
-        },
+        pageBuilder: (context, state) => _routePage(
+          state,
+          InviteRedirectScreen(code: state.pathParameters['code'] ?? ''),
+        ),
       ),
       GoRoute(
         path: '/join-workspace/:code',
-        builder: (context, state) {
-          return WorkspaceJoinScreen(code: state.pathParameters['code'] ?? '');
-        },
+        pageBuilder: (context, state) => _routePage(
+          state,
+          WorkspaceJoinScreen(code: state.pathParameters['code'] ?? ''),
+        ),
       ),
       GoRoute(
         path: '/profile',
@@ -68,24 +81,79 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: '/profile/:section',
-        builder: (context, state) {
-          return ProfileScreen(
-            section: state.pathParameters['section'] ?? 'account',
+        pageBuilder: (context, state) {
+          return _routePage(
+            state,
+            ProfileScreen(
+              section: state.pathParameters['section'] ?? 'account',
+            ),
           );
         },
       ),
-      GoRoute(path: '/admin', builder: (context, state) => const AdminScreen()),
+      GoRoute(
+        path: '/admin',
+        pageBuilder: (context, state) => _routePage(state, const AdminScreen()),
+      ),
       GoRoute(
         path: '/debug/theme',
-        builder: (context, state) => const ThemePreviewScreen(),
+        pageBuilder: (context, state) =>
+            _routePage(state, const ThemePreviewScreen()),
       ),
       GoRoute(
         path: '/project/:projectId',
-        builder: (context, state) {
-          return ChatScreen(projectId: state.pathParameters['projectId'] ?? '');
-        },
+        pageBuilder: (context, state) => _routePage(
+          state,
+          ChatScreen(projectId: state.pathParameters['projectId'] ?? ''),
+        ),
       ),
       GoRoute(path: '/:path(.*)', redirect: (context, state) => '/'),
     ],
   );
 });
+
+class _AuthRouteRefresh extends ChangeNotifier {
+  _AuthRouteRefresh(this._ref) {
+    _subscription = _ref.listen(authControllerProvider, (previous, next) {
+      _authValue = next;
+      notifyListeners();
+    }, fireImmediately: true);
+  }
+
+  final Ref _ref;
+  late final ProviderSubscription<AsyncValue<AuthState>> _subscription;
+  AsyncValue<AuthState> _authValue = const AsyncLoading<AuthState>();
+
+  AsyncValue<AuthState> get authValue => _authValue;
+
+  @override
+  void dispose() {
+    _subscription.close();
+    super.dispose();
+  }
+}
+
+CustomTransitionPage<void> _routePage(GoRouterState state, Widget child) {
+  return CustomTransitionPage<void>(
+    key: state.pageKey,
+    child: child,
+    transitionDuration: const Duration(milliseconds: 150),
+    reverseTransitionDuration: const Duration(milliseconds: 110),
+    transitionsBuilder: (context, animation, secondaryAnimation, child) {
+      final curved = CurvedAnimation(
+        parent: animation,
+        curve: Curves.easeOutCubic,
+        reverseCurve: Curves.easeInCubic,
+      );
+      return FadeTransition(
+        opacity: curved,
+        child: SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(0.015, 0),
+            end: Offset.zero,
+          ).animate(curved),
+          child: child,
+        ),
+      );
+    },
+  );
+}

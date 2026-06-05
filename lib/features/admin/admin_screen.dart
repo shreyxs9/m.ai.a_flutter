@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -12,6 +13,7 @@ import '../../core/auth/browser_url.dart';
 import '../../core/network/api_exception.dart';
 import '../../core/theme/maia_theme_helpers.dart';
 import '../../models/models.dart';
+import '../projects/project_avatar_widget.dart';
 
 final adminControllerProvider =
     AsyncNotifierProvider<AdminController, AdminConsoleState>(
@@ -23,6 +25,8 @@ enum AdminSection { members, projects, audit }
 enum RoleFilter { all, admin, member }
 
 enum SortDirection { ascending, descending }
+
+const _adminVisibleRowLimit = 100;
 
 enum MemberSortKey { name, email, title, role, joined }
 
@@ -644,7 +648,7 @@ class _NavButton extends StatelessWidget {
   }
 }
 
-class _AdminContent extends StatelessWidget {
+class _AdminContent extends StatefulWidget {
   const _AdminContent({
     required this.state,
     required this.section,
@@ -674,50 +678,104 @@ class _AdminContent extends StatelessWidget {
   final ValueChanged<ProjectSortKey> onProjectSort;
 
   @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: Listenable.merge([memberSearch, projectSearch]),
-      builder: (context, _) {
-        final members = _filteredMembers(
-          state.members,
-          memberSearch.text,
-          roleFilter,
-          memberSortKey,
-          memberSortDirection,
-        );
-        final projects = _filteredProjects(
-          state.projects,
-          projectSearch.text,
-          projectSortKey,
-          projectSortDirection,
-        );
+  State<_AdminContent> createState() => _AdminContentState();
+}
 
-        return switch (section) {
-          AdminSection.projects => _ProjectsPanel(
-            projects: projects,
-            totalCount: state.projects.length,
-            search: projectSearch,
-            sortKey: projectSortKey,
-            sortDirection: projectSortDirection,
-            busyId: state.busyId,
-            onSort: onProjectSort,
-          ),
-          AdminSection.audit => const _AuditPanel(),
-          AdminSection.members => _MembersPanel(
-            members: members,
-            totalCount: state.members.length,
-            currentUserId: state.currentUserId!,
-            search: memberSearch,
-            roleFilter: roleFilter,
-            sortKey: memberSortKey,
-            sortDirection: memberSortDirection,
-            busyId: state.busyId,
-            onRoleFilterChanged: onRoleFilterChanged,
-            onSort: onMemberSort,
-          ),
-        };
-      },
+class _AdminContentState extends State<_AdminContent> {
+  Timer? _searchDebounce;
+  late List<TenantMembership> _members;
+  late List<ProjectListItem> _projects;
+
+  @override
+  void initState() {
+    super.initState();
+    _recompute();
+    widget.memberSearch.addListener(_scheduleSearch);
+    widget.projectSearch.addListener(_scheduleSearch);
+  }
+
+  @override
+  void didUpdateWidget(covariant _AdminContent oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.memberSearch != widget.memberSearch) {
+      oldWidget.memberSearch.removeListener(_scheduleSearch);
+      widget.memberSearch.addListener(_scheduleSearch);
+    }
+    if (oldWidget.projectSearch != widget.projectSearch) {
+      oldWidget.projectSearch.removeListener(_scheduleSearch);
+      widget.projectSearch.addListener(_scheduleSearch);
+    }
+    if (oldWidget.state.members != widget.state.members ||
+        oldWidget.state.projects != widget.state.projects ||
+        oldWidget.roleFilter != widget.roleFilter ||
+        oldWidget.memberSortKey != widget.memberSortKey ||
+        oldWidget.memberSortDirection != widget.memberSortDirection ||
+        oldWidget.projectSortKey != widget.projectSortKey ||
+        oldWidget.projectSortDirection != widget.projectSortDirection) {
+      _searchDebounce?.cancel();
+      _recompute();
+    }
+  }
+
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    widget.memberSearch.removeListener(_scheduleSearch);
+    widget.projectSearch.removeListener(_scheduleSearch);
+    super.dispose();
+  }
+
+  void _scheduleSearch() {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 180), () {
+      if (mounted) {
+        setState(_recompute);
+      }
+    });
+  }
+
+  void _recompute() {
+    _members = _filteredMembers(
+      widget.state.members,
+      widget.memberSearch.text,
+      widget.roleFilter,
+      widget.memberSortKey,
+      widget.memberSortDirection,
     );
+    _projects = _filteredProjects(
+      widget.state.projects,
+      widget.projectSearch.text,
+      widget.projectSortKey,
+      widget.projectSortDirection,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return switch (widget.section) {
+      AdminSection.projects => _ProjectsPanel(
+        projects: _projects,
+        totalCount: widget.state.projects.length,
+        search: widget.projectSearch,
+        sortKey: widget.projectSortKey,
+        sortDirection: widget.projectSortDirection,
+        busyId: widget.state.busyId,
+        onSort: widget.onProjectSort,
+      ),
+      AdminSection.audit => const _AuditPanel(),
+      AdminSection.members => _MembersPanel(
+        members: _members,
+        totalCount: widget.state.members.length,
+        currentUserId: widget.state.currentUserId!,
+        search: widget.memberSearch,
+        roleFilter: widget.roleFilter,
+        sortKey: widget.memberSortKey,
+        sortDirection: widget.memberSortDirection,
+        busyId: widget.state.busyId,
+        onRoleFilterChanged: widget.onRoleFilterChanged,
+        onSort: widget.onMemberSort,
+      ),
+    };
   }
 }
 
@@ -749,9 +807,13 @@ class _MembersPanel extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final wide = MediaQuery.sizeOf(context).width >= 780;
+    final visibleMembers = members.take(_adminVisibleRowLimit).toList();
+    final hiddenCount = members.length - visibleMembers.length;
     return _PanelScroll(
       title: 'Members',
-      subtitle: '${members.length} of $totalCount shown',
+      subtitle: hiddenCount > 0
+          ? '${visibleMembers.length} of ${members.length} matches shown'
+          : '${members.length} of $totalCount shown',
       trailing: Wrap(
         spacing: 8,
         runSpacing: 8,
@@ -785,22 +847,28 @@ class _MembersPanel extends ConsumerWidget {
         ],
       ),
       child: wide
-          ? _MembersTable(
-              members: members,
-              currentUserId: currentUserId,
-              sortKey: sortKey,
-              sortDirection: sortDirection,
-              busyId: busyId,
-              onSort: onSort,
+          ? Column(
+              children: [
+                _MembersTable(
+                  members: visibleMembers,
+                  currentUserId: currentUserId,
+                  sortKey: sortKey,
+                  sortDirection: sortDirection,
+                  busyId: busyId,
+                  onSort: onSort,
+                ),
+                if (hiddenCount > 0) _MoreRowsNotice(hiddenCount: hiddenCount),
+              ],
             )
           : Column(
               children: [
-                for (final member in members)
+                for (final member in visibleMembers)
                   _MemberCard(
                     member: member,
                     currentUserId: currentUserId,
                     busy: busyId == 'member:${member.userId}',
                   ),
+                if (hiddenCount > 0) _MoreRowsNotice(hiddenCount: hiddenCount),
               ],
             ),
     );
@@ -1022,9 +1090,13 @@ class _ProjectsPanel extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final wide = MediaQuery.sizeOf(context).width >= 780;
+    final visibleProjects = projects.take(_adminVisibleRowLimit).toList();
+    final hiddenCount = projects.length - visibleProjects.length;
     return _PanelScroll(
       title: 'Projects',
-      subtitle: '${projects.length} of $totalCount shown',
+      subtitle: hiddenCount > 0
+          ? '${visibleProjects.length} of ${projects.length} matches shown'
+          : '${projects.length} of $totalCount shown',
       trailing: SizedBox(
         width: wide ? 280 : double.infinity,
         child: TextField(
@@ -1036,20 +1108,26 @@ class _ProjectsPanel extends ConsumerWidget {
         ),
       ),
       child: wide
-          ? _ProjectsTable(
-              projects: projects,
-              sortKey: sortKey,
-              sortDirection: sortDirection,
-              busyId: busyId,
-              onSort: onSort,
+          ? Column(
+              children: [
+                _ProjectsTable(
+                  projects: visibleProjects,
+                  sortKey: sortKey,
+                  sortDirection: sortDirection,
+                  busyId: busyId,
+                  onSort: onSort,
+                ),
+                if (hiddenCount > 0) _MoreRowsNotice(hiddenCount: hiddenCount),
+              ],
             )
           : Column(
               children: [
-                for (final project in projects)
+                for (final project in visibleProjects)
                   _ProjectCard(
                     project: project,
                     busy: busyId == 'project:${project.id}',
                   ),
+                if (hiddenCount > 0) _MoreRowsNotice(hiddenCount: hiddenCount),
               ],
             ),
     );
@@ -1317,6 +1395,28 @@ class _TableFrame extends StatelessWidget {
   }
 }
 
+class _MoreRowsNotice extends StatelessWidget {
+  const _MoreRowsNotice({required this.hiddenCount});
+
+  final int hiddenCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.maia;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Text(
+        '$hiddenCount more hidden. Refine search to narrow results.',
+        textAlign: TextAlign.center,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: tokens.faint,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+}
+
 class _MemberIdentity extends StatelessWidget {
   const _MemberIdentity(this.user);
 
@@ -1417,26 +1517,11 @@ class _Avatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final initials = user.name
-        .trim()
-        .split(RegExp(r'\s+'))
-        .where((part) => part.isNotEmpty)
-        .take(2)
-        .map((part) => part[0].toUpperCase())
-        .join();
-    return CircleAvatar(
+    return UserAvatarWidget(
+      user: user,
+      name: user.name,
       radius: 18,
-      foregroundImage: user.avatarUrl == null
-          ? null
-          : NetworkImage(user.avatarUrl!),
-      backgroundColor: context.maia.accentSoft,
-      child: Text(
-        initials.isEmpty ? '?' : initials,
-        style: Theme.of(context).textTheme.labelMedium?.copyWith(
-          color: context.maia.accent,
-          fontWeight: FontWeight.w900,
-        ),
-      ),
+      color: context.maia.accent,
     );
   }
 }

@@ -10,6 +10,7 @@ import '../../core/theme/maia_theme_helpers.dart';
 import '../../core/theme/maia_theme_tokens.dart';
 import '../../core/theme/theme_controller.dart';
 import '../../models/models.dart';
+import '../projects/project_avatar_widget.dart';
 
 const _profileSections = <String>{
   'account',
@@ -1287,26 +1288,11 @@ class _ProfileAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final initials = user.name
-        .trim()
-        .split(RegExp(r'\s+'))
-        .where((part) => part.isNotEmpty)
-        .take(2)
-        .map((part) => part[0].toUpperCase())
-        .join();
-    return CircleAvatar(
+    return UserAvatarWidget(
+      user: user,
+      name: user.name,
       radius: radius,
-      foregroundImage: user.avatarUrl == null
-          ? null
-          : NetworkImage(user.avatarUrl!),
-      backgroundColor: context.maia.accentSoft,
-      child: Text(
-        initials.isEmpty ? '?' : initials,
-        style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-          color: context.maia.accent,
-          fontWeight: FontWeight.w800,
-        ),
-      ),
+      color: context.maia.accent,
     );
   }
 }

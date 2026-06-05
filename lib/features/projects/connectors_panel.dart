@@ -253,7 +253,7 @@ class _ConnectorsPanelState extends ConsumerState<ConnectorsPanel> {
           children: [
             Expanded(
               child: Text(
-                'Google Sheets · ${_sheets.length}/$_maxSheets',
+                'Google Sheets - ${_sheets.length}/$_maxSheets',
                 style: Theme.of(context).textTheme.labelLarge?.copyWith(
                   color: tokens.text,
                   fontWeight: FontWeight.w800,
