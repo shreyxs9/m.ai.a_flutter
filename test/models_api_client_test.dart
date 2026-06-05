@@ -256,6 +256,60 @@ void main() {
       expect(merged, hasLength(1));
       expect((attachments.single as Map)['status'], 'ready');
     });
+
+    test(
+      'drops optimistic user reply when backend copy has different user id',
+      () {
+        final optimisticCreatedAt = DateTime.parse('2026-05-22T12:00:00Z');
+        final backendCreatedAt = DateTime.parse('2026-05-22T12:00:08Z');
+        final current = [
+          _message(
+            'temp-1',
+            body: ' hello   Maia ',
+            fromUserId: null,
+            createdAt: optimisticCreatedAt,
+          ),
+        ];
+        final incoming = [
+          _message(
+            'm1',
+            body: 'hello Maia',
+            fromUserId: 'user-1',
+            createdAt: backendCreatedAt,
+          ),
+        ];
+
+        final reconciled = dropOptimisticTwins(current, incoming);
+        final merged = mergeMessagesById(reconciled, incoming);
+
+        expect(reconciled, isEmpty);
+        expect(merged.map((message) => message.id), ['m1']);
+      },
+    );
+
+    test(
+      'keeps optimistic user reply when matching old text is outside window',
+      () {
+        final current = [
+          _message(
+            'temp-1',
+            body: 'same update',
+            createdAt: DateTime.parse('2026-05-22T12:05:00Z'),
+          ),
+        ];
+        final incoming = [
+          _message(
+            'm1',
+            body: 'same update',
+            createdAt: DateTime.parse('2026-05-22T12:00:00Z'),
+          ),
+        ];
+
+        final reconciled = dropOptimisticTwins(current, incoming);
+
+        expect(reconciled.map((message) => message.id), ['temp-1']);
+      },
+    );
   });
 
   group('polling cadence', () {
@@ -403,15 +457,18 @@ Message _message(
   String id, {
   required String body,
   String type = 'user_reply',
+  String threadId = 'thread-1',
+  String? fromUserId = 'user-1',
+  DateTime? createdAt,
   Map<String, dynamic>? extra,
 }) {
   return Message(
     id: id,
-    threadId: 'thread-1',
+    threadId: threadId,
     type: type,
     body: body,
     tone: null,
-    fromUserId: 'user-1',
+    fromUserId: fromUserId,
     toUserId: null,
     toAudience: null,
     recipient: null,
@@ -420,7 +477,7 @@ Message _message(
     originalText: null,
     extra: extra,
     promptVersionId: null,
-    createdAt: DateTime.parse('2026-05-22T12:00:00Z'),
+    createdAt: createdAt ?? DateTime.parse('2026-05-22T12:00:00Z'),
     resolvedAt: null,
   );
 }

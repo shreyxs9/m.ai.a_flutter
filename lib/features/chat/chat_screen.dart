@@ -4140,23 +4140,41 @@ List<Message> _dropOptimisticTwin(
   List<Message> current,
   List<Message> incoming,
 ) {
+  return dropOptimisticTwins(current, incoming);
+}
+
+List<Message> dropOptimisticTwins(
+  List<Message> current,
+  List<Message> incoming,
+) {
   final incomingReplies = incoming
       .where((message) => message.type == 'user_reply')
-      .map(
-        (message) =>
-            '${message.threadId}|${message.fromUserId}|${message.body}',
-      )
-      .toSet();
+      .toList(growable: false);
   return current
       .where((message) {
-        if (!message.id.startsWith('temp-')) {
+        if (!message.id.startsWith('temp-') || message.type != 'user_reply') {
           return true;
         }
-        return !incomingReplies.contains(
-          '${message.threadId}|${message.fromUserId}|${message.body}',
+        return !incomingReplies.any(
+          (incoming) => _isOptimisticTwin(message, incoming),
         );
       })
       .toList(growable: false);
+}
+
+bool _isOptimisticTwin(Message optimistic, Message incoming) {
+  if (optimistic.threadId != incoming.threadId) {
+    return false;
+  }
+  if (_messageBodyKey(optimistic.body) != _messageBodyKey(incoming.body)) {
+    return false;
+  }
+  final delta = optimistic.createdAt.difference(incoming.createdAt).abs();
+  return delta <= const Duration(minutes: 2);
+}
+
+String _messageBodyKey(String? body) {
+  return (body ?? '').trim().replaceAll(RegExp(r'\s+'), ' ');
 }
 
 List<Message> _ordered(List<Message> messages) {

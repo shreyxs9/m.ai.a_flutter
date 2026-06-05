@@ -137,10 +137,11 @@ class AuthController extends AsyncNotifier<AuthState> {
     }
 
     try {
+      final savedTenantIdFuture = _sessionStore.getTenantId();
       final user = await _authService.getMe();
       final tenantList = await _tenantService.list();
 
-      final savedTenantId = await _sessionStore.getTenantId();
+      final savedTenantId = await savedTenantIdFuture;
       final activeTenant = _chooseTenant(tenantList, savedTenantId);
       if (activeTenant != null) {
         await _sessionStore.setTenantId(activeTenant.id);
@@ -373,7 +374,6 @@ class AuthController extends AsyncNotifier<AuthState> {
     final deadline = DateTime.now().add(Duration(seconds: session.expiresIn));
 
     while (DateTime.now().isBefore(deadline)) {
-      await Future<void>.delayed(Duration(seconds: intervalSeconds));
       final result = await _authService.pollLoginSession(
         session.sessionId,
         verifier,
@@ -382,6 +382,7 @@ class AuthController extends AsyncNotifier<AuthState> {
       if (result.isComplete && token != null && token.isNotEmpty) {
         return token;
       }
+      await Future<void>.delayed(Duration(seconds: intervalSeconds));
     }
 
     throw const ApiException(

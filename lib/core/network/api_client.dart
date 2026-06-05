@@ -14,8 +14,8 @@ class ApiClient {
     ApiConfig config = ApiConfig.defaultConfig,
     ApiSessionStore sessionStore = const ApiSessionStore(),
     Dio? dio,
-  })  : _sessionStore = sessionStore,
-        dio = dio ?? Dio() {
+  }) : _sessionStore = sessionStore,
+       dio = dio ?? Dio() {
     this.dio.options = BaseOptions(
       baseUrl: config.normalizedBaseUrl,
       connectTimeout: config.timeout,
@@ -23,32 +23,34 @@ class ApiClient {
       contentType: Headers.jsonContentType,
       responseType: ResponseType.json,
       validateStatus: (_) => true,
-      headers: const {
-        Headers.acceptHeader: Headers.jsonContentType,
-      },
+      headers: const {Headers.acceptHeader: Headers.jsonContentType},
     );
 
     this.dio.interceptors.add(
-          InterceptorsWrapper(
-            onRequest: (options, handler) async {
-              final token = await _sessionStore.getToken();
-              if (token != null && token.isNotEmpty) {
-                options.headers['Authorization'] = 'Bearer $token';
-              } else {
-                options.headers.remove('Authorization');
-              }
+      InterceptorsWrapper(
+        onRequest: (options, handler) async {
+          final sessionValues = await Future.wait<String?>([
+            _sessionStore.getToken(),
+            _sessionStore.getTenantId(),
+          ]);
+          final token = sessionValues[0];
+          if (token != null && token.isNotEmpty) {
+            options.headers['Authorization'] = 'Bearer $token';
+          } else {
+            options.headers.remove('Authorization');
+          }
 
-              final tenantId = await _sessionStore.getTenantId();
-              if (tenantId != null && tenantId.isNotEmpty) {
-                options.headers['X-Tenant-Id'] = tenantId;
-              } else {
-                options.headers.remove('X-Tenant-Id');
-              }
+          final tenantId = sessionValues[1];
+          if (tenantId != null && tenantId.isNotEmpty) {
+            options.headers['X-Tenant-Id'] = tenantId;
+          } else {
+            options.headers.remove('X-Tenant-Id');
+          }
 
-              handler.next(options);
-            },
-          ),
-        );
+          handler.next(options);
+        },
+      ),
+    );
   }
 
   final Dio dio;
@@ -204,31 +206,31 @@ class ApiClient {
 
     return switch (error.type) {
       DioExceptionType.connectionTimeout => ApiException(
-          status,
-          'Connection timed out. Check your network and try again.',
-        ),
+        status,
+        'Connection timed out. Check your network and try again.',
+      ),
       DioExceptionType.sendTimeout => ApiException(
-          status,
-          'Request timed out while sending data. Try again.',
-        ),
+        status,
+        'Request timed out while sending data. Try again.',
+      ),
       DioExceptionType.receiveTimeout => ApiException(
-          status,
-          'Server took too long to respond. Try again.',
-        ),
+        status,
+        'Server took too long to respond. Try again.',
+      ),
       DioExceptionType.badResponse => ApiException(status, responseMessage),
       DioExceptionType.cancel => const ApiException(null, 'Request cancelled.'),
       DioExceptionType.connectionError => ApiException(
-          status,
-          'Unable to reach the server. Check your connection and try again.',
-        ),
+        status,
+        'Unable to reach the server. Check your connection and try again.',
+      ),
       DioExceptionType.badCertificate => ApiException(
-          status,
-          'Could not establish a secure connection to the server.',
-        ),
+        status,
+        'Could not establish a secure connection to the server.',
+      ),
       DioExceptionType.unknown => ApiException(
-          status,
-          error.message ?? 'Network request failed.',
-        ),
+        status,
+        error.message ?? 'Network request failed.',
+      ),
     };
   }
 }
