@@ -1,6 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:math';
 
 import 'package:app_links/app_links.dart';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -152,7 +155,9 @@ class AuthController extends AsyncNotifier<AuthState> {
         loading: false,
       );
     } catch (error) {
-      await _sessionStore.clear();
+      if (_isSessionFailure(error)) {
+        await _sessionStore.clear();
+      }
       return AuthState(loading: false, error: _messageFor(error));
     }
   }
@@ -165,6 +170,37 @@ class AuthController extends AsyncNotifier<AuthState> {
   Future<void> logout() async {
     await _sessionStore.clear();
     state = const AsyncData(AuthState(loading: false));
+  }
+
+  Future<void> signInWithBrokeredOAuth(
+    Future<void> Function(Uri url) openAuthUrl,
+  ) async {
+    state = AsyncData(
+      (state.asData?.value ?? const AuthState()).copyWith(
+        loading: true,
+        clearError: true,
+      ),
+    );
+
+    try {
+      final verifier = _createPkceVerifier();
+      final session = await _authService.startLoginSession(
+        _createPkceChallenge(verifier),
+      );
+      final authUri = Uri.parse(session.url);
+      if (!authUri.hasScheme || session.sessionId.isEmpty) {
+        throw const ApiException(
+          null,
+          'Google sign in did not return a valid authorization URL.',
+        );
+      }
+      await openAuthUrl(authUri);
+      final token = await _pollLoginSession(session, verifier);
+      await _sessionStore.setToken(token);
+      state = await AsyncValue.guard(_bootstrap);
+    } catch (error) {
+      state = AsyncData(AuthState(loading: false, error: _messageFor(error)));
+    }
   }
 
   Future<void> switchTenant(Tenant tenant) async {
@@ -329,6 +365,49 @@ class AuthController extends AsyncNotifier<AuthState> {
     }
   }
 
+  Future<String> _pollLoginSession(
+    LoginSessionStartResult session,
+    String verifier,
+  ) async {
+    final intervalSeconds = max(1, session.interval);
+    final deadline = DateTime.now().add(Duration(seconds: session.expiresIn));
+
+    while (DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(Duration(seconds: intervalSeconds));
+      final result = await _authService.pollLoginSession(
+        session.sessionId,
+        verifier,
+      );
+      final token = result.token;
+      if (result.isComplete && token != null && token.isNotEmpty) {
+        return token;
+      }
+    }
+
+    throw const ApiException(
+      null,
+      'Google sign in expired. Please start sign in again.',
+    );
+  }
+
+  String _createPkceVerifier() {
+    final random = Random.secure();
+    final bytes = Uint8List.fromList(
+      List<int>.generate(64, (_) => random.nextInt(256)),
+    );
+    return _base64UrlNoPadding(bytes);
+  }
+
+  String _createPkceChallenge(String verifier) {
+    return _base64UrlNoPadding(
+      Uint8List.fromList(sha256.convert(utf8.encode(verifier)).bytes),
+    );
+  }
+
+  String _base64UrlNoPadding(List<int> bytes) {
+    return base64UrlEncode(bytes).replaceAll('=', '');
+  }
+
   Tenant? _chooseTenant(List<Tenant> tenants, String? tenantId) {
     if (tenants.isEmpty) {
       return null;
@@ -342,15 +421,18 @@ class AuthController extends AsyncNotifier<AuthState> {
   }
 
   bool _isSessionFailure(Object error) {
-    return error is ApiException &&
-        (error.status == 401 || error.status == 403 || error.status == null);
+    return error is ApiException && error.status == 401;
   }
 
   String _messageFor(Object error) {
     if (error is ApiException && error.message.isNotEmpty) {
       return error.message;
     }
-    return 'Session expired. Please sign in again.';
+    final message = error.toString().trim();
+    if (message.isNotEmpty && message != 'null') {
+      return message;
+    }
+    return 'Something went wrong while restoring your session. Please try again.';
   }
 }
 

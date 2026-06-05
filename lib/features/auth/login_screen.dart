@@ -86,6 +86,26 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       redirectUri: kIsWeb ? null : config.mobileRedirectUri,
     );
     try {
+      if (!kIsWeb) {
+        await ref
+            .read(authControllerProvider.notifier)
+            .signInWithBrokeredOAuth(
+              (uri) => launchUrl(uri, mode: LaunchMode.externalApplication),
+            );
+        if (!mounted) {
+          return;
+        }
+        final auth = ref.read(authControllerProvider).asData?.value;
+        if (auth?.isAuthenticated == true) {
+          return;
+        }
+        setState(() {
+          _loading = false;
+          _error = auth?.error ?? 'Google sign in could not complete.';
+        });
+        return;
+      }
+
       navigateBrowserTo(url);
       final uri = Uri.tryParse(url);
       if (uri != null && uri.hasScheme) {

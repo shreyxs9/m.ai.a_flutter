@@ -1,13 +1,13 @@
 # M.AI.A Flutter
 
-Flutter Web migration of the M.AI.A team workspace app. The app mirrors the React frontend flows for Google OAuth login, tenant/workspace selection, workspace and project invites, project chat, SSE streaming, relays, broadcasts, profile settings, admin workspace management, and Google Sheets project connectors.
+Flutter Web migration of the M.AI.A team workspace app. The app mirrors the React frontend flows for Google OAuth login, tenant/workspace selection, workspace and project invites, poll-only project chat, relays, broadcasts, profile settings, admin workspace management, and Google Sheets project connectors.
 
 ## Project Overview
 
 - `go_router` handles `/`, invite, profile, admin, project, and fallback routes.
 - `flutter_riverpod` owns auth/session state, theme selection, project dashboard state, and admin controller state.
 - `dio` talks to the FastAPI backend under `/api/v1`, adding `Authorization: Bearer ...` and `X-Tenant-Id` from persisted session state.
-- `shared_preferences` persists Flutter-side session and theme keys. Web-only browser helpers use `localStorage` for OAuth callback, timezone, pending stream, and push-prompt state.
+- `shared_preferences` persists Flutter-side session and theme keys. Web-only browser helpers use `localStorage` for OAuth callback, timezone, and push-prompt state.
 - `flutter_markdown` renders chat markdown content.
 
 ## Run Locally
@@ -19,12 +19,12 @@ flutter pub get
 flutter run -d chrome --web-port 3000
 ```
 
-The default API target is:
+The default API target is the Render backend:
 
 ```text
-MAIA_API_BASE_URL=http://localhost:8000
+MAIA_API_BASE_URL=https://maia-backend-7vtst4xamq-el.a.run.app
 MAIA_API_BASE_PATH=/api/v1
-API_ORIGIN=http://localhost:8000
+API_ORIGIN=https://maia-backend-7vtst4xamq-el.a.run.app
 ```
 
 ## API_ORIGIN
@@ -32,7 +32,7 @@ API_ORIGIN=http://localhost:8000
 `API_ORIGIN` controls the browser navigation target for Google login redirects. Pass it with `--dart-define` when the backend origin is different from the API base URL:
 
 ```powershell
-flutter run -d chrome --web-port 3000 --dart-define=API_ORIGIN=http://localhost:8000
+flutter run -d chrome --web-port 3000 --dart-define=API_ORIGIN=https://maia-backend-7vtst4xamq-el.a.run.app
 ```
 
 For phone testing on the same Wi-Fi, use LAN origins for both the app API and login redirect:

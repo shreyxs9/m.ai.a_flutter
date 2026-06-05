@@ -34,6 +34,39 @@ class AuthService {
     return response?['url']?.toString() ?? '';
   }
 
+  Future<LoginSessionStartResult> startLoginSession(
+    String codeChallenge,
+  ) async {
+    final response = await client.post<Map<String, dynamic>>(
+      '/auth/login/session',
+      body: {'code_challenge': codeChallenge},
+    );
+    if (response == null) {
+      throw const ApiException(
+        null,
+        'Google sign in did not return a login session.',
+      );
+    }
+    return LoginSessionStartResult.fromJson(response);
+  }
+
+  Future<LoginSessionPollResult> pollLoginSession(
+    String sessionId,
+    String verifier,
+  ) async {
+    final response = await client.get<Map<String, dynamic>>(
+      '/auth/login/session/${Uri.encodeComponent(sessionId)}',
+      options: Options(headers: {'X-PKCE-Verifier': verifier}),
+    );
+    if (response == null) {
+      throw const ApiException(
+        null,
+        'Google sign in returned an empty status.',
+      );
+    }
+    return LoginSessionPollResult.fromJson(response);
+  }
+
   Future<GoogleSheetsStatus?> googleSheetsStatus() {
     return client.get(
       '/auth/google-sheets/status',
@@ -60,6 +93,52 @@ class AuthService {
             .toList(growable: false) ??
         <Map<String, dynamic>>[];
   }
+}
+
+class LoginSessionStartResult {
+  const LoginSessionStartResult({
+    required this.sessionId,
+    required this.url,
+    required this.expiresIn,
+    required this.interval,
+  });
+
+  factory LoginSessionStartResult.fromJson(Map<String, dynamic> json) {
+    return LoginSessionStartResult(
+      sessionId: json['session_id']?.toString() ?? '',
+      url: json['url']?.toString() ?? '',
+      expiresIn: _intFromJson(json['expires_in'], fallback: 300),
+      interval: _intFromJson(json['interval'], fallback: 2),
+    );
+  }
+
+  final String sessionId;
+  final String url;
+  final int expiresIn;
+  final int interval;
+}
+
+class LoginSessionPollResult {
+  const LoginSessionPollResult({required this.status, this.token});
+
+  factory LoginSessionPollResult.fromJson(Map<String, dynamic> json) {
+    return LoginSessionPollResult(
+      status: json['status']?.toString() ?? 'pending',
+      token: json['token']?.toString(),
+    );
+  }
+
+  final String status;
+  final String? token;
+
+  bool get isComplete => status == 'complete';
+}
+
+int _intFromJson(Object? value, {required int fallback}) {
+  if (value is num) {
+    return value.toInt();
+  }
+  return int.tryParse(value?.toString() ?? '') ?? fallback;
 }
 
 class TenantService {
